@@ -3,6 +3,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+Config("config.yaml", can_include=["API"])
 
 async def homepage(request):
     return JSONResponse({'hello': 'world'})

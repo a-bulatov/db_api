@@ -12,7 +12,7 @@ select data.sheet_set('{"guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7",
 "rows":[
 {"data":{"id":1,"name":"aaa", "flag":true}, "guid":"75e8989f-8d03-429e-9233-0e6117880715"},
 {"data":{"id":2,"name":"bbb"}, "guid":"3fa7d460-baf9-446b-bc66-f3a8a9db5470"},
-{"data":{"id":3,"name":"ccc", "flag":false}}
+{"data":{"id":3,"name":"ccc", "flag":false}, "guid":"30fa5076-de4d-4bab-9bfa-550d2ff1f6dd"}
 ]}')
 
 select data.sheet_set('{"guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7",
@@ -30,6 +30,13 @@ select meta.sheet_set('{"title":"refs",
 ]}')
 
 
+select data.sheet_set('{"guid":"631d0a40-3d8d-407e-bd43-d0675fede9fb",
+"rows":[
+{"data":{"id":1,"ref":"75e8989f-8d03-429e-9233-0e6117880715"}},
+{"data":{"id":2,"ref":"30fa5076-de4d-4bab-9bfa-550d2ff1f6dd"}}
+]}')
+
+
 
 select r.guid,
   (SELECT (
@@ -41,6 +48,7 @@ select r.guid,
     when dt.eav_field='i' then json_build_object(atr.name, eav.i)
     when dt.eav_field='f' then json_build_object(atr.name, eav.f)
     when dt.eav_field='t' then json_build_object(atr.name, eav.t)
+    else json_build_object()
   end
   )) arr
   CROSS JOIN LATERAL jsonb_each(arr) e)) data

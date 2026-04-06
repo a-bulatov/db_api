@@ -4,9 +4,3 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.10"
 dependencies = []
-
-[defaults]
-database = "db"
-script = "db.sql"
-[database]
-db ="postgresql://localhost:5432/eav_db?user=postgres&password=postgres"

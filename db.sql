@@ -15,7 +15,7 @@ create table meta."enum" (
 create unique index meta_enum_uk on meta.enum using btree (coalesce(parent_id, (0)::bigint), key);
 comment on table meta."enum" is 'хранилище перечислений';
 
-create function meta.enum_id(enum_key character varying)
+create function meta.enum_id(enum_key varchar(100))
  returns bigint
  language sql
  stable
@@ -23,21 +23,52 @@ as
 $$
 select id from meta.enum where parent_id is null and key = enum_key;
 $$;
+comment on function meta.enum_id is 'Возвращает ID перечисления по ключу';
 
-insert into meta.enum("key", "name") values ('data_type', 'Типы данных');
+create function meta.enum_keys(enum_key varchar(100))
+ returns varchar[]
+ language sql
+ stable
+as
+$$
+select array_agg(v.key order by v.key asc)
+from meta.enum t
+inner join meta.enum v on v.parent_id=t.id
+where t.parent_id is null and t.key = enum_key;
+$$;
+comment on function meta.enum_keys is 'Возврашает список ключей перечисления';
+
+insert into meta.enum("key", "name")
+values
+('data_type', 'Типы данных'),
+('version_status','Статусы версии')
+;
 
 create table meta.data_type ( like meta."enum" including indexes, check(parent_id =  meta.enum_id('data_type')) ) inherits (meta."enum");
 alter table meta.data_type add column eav_field char(1) not null;
 comment on column meta.data_type.eav_field is 'имя поля в таблице eav, где лежат данные этого типа';
+alter table meta.data_type alter column parent_id set default meta.enum_id('data_type');
 
 insert into meta.data_type("key","name","eav_field")
 values ('R','Ссылка','r'),
+       ('M','Множество ссылок','s'),
        ('I','Целое','i'),
        ('F','Дробное число','f'),
        ('S','Строка','s'),
        ('T','Дата/Время','t'),
        ('B','Логическое значение','i'),
        ('E','Список значений из справочника','s');
+
+insert into meta.enum(key, name, parent_id)
+select x.column1, x.column2, meta.enum_id('version_status')
+from (values
+  ('A', 'Актуальная', 1),
+  ('L', 'Заблокирована', 2),
+  ('D', 'Черновик', 3),
+  ('C', 'Закрыта и отклонена', 3)
+) x
+order by x.column3;
+
 
 create table meta.entity (
 	id bigserial not null primary key,
@@ -55,9 +86,10 @@ create table meta."version" (
 	parent_id integer null,
 	dt timestamp default now() not null,
 	npp smallint null,
-	dt_lock timestamp,
+	status char(1) not null default 'D'::char(1),
 	constraint unique_npp unique (entity_id, npp),
-	constraint version_npp_check check (npp > 0)
+	constraint version_npp_check check (npp > 0),
+	constraint status_in_list check(status = any(meta.enum_keys('version_status')))
 );
 comment on table meta."version" is 'список версий таблиц';
 
@@ -144,7 +176,7 @@ begin
              from meta.attribute a
              inner join meta.entity e on e.guid = v_column.ref_guid::uuid and  a.entity_id = e.id and a.name = v_column.ref_names;
 
-             if v_column.ref_attribute is null then
+             if v_column.ref_attribute_id is null then
                 return jsonb_build_object('error', format('Не найден ссылочный атрибут %s для поля %s', v_column.ref_names, v_column.name));
              end if;
         elseif v_column.type_key = 'E' then
@@ -248,6 +280,7 @@ declare
    v_row record;
    tmp_row_guid varchar = '';
    tmp_row_id bigint;
+   tmp_value varchar;
 begin
    select
        0::bigint "input",
@@ -259,6 +292,7 @@ begin
    select
        e.id,
        coalesce(v.id, v1.id) as version_id,
+       coalesce(v.status, v1.status) as version_staus,
        (v.id is not null) version_exists,
        coalesce(e.guid, uuid_generate_v4()) guid,
        coalesce(v.guid, uuid_generate_v4()) version_guid,
@@ -273,7 +307,7 @@ begin
         return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
    end if;
 
-   if v_sheet.version_id is Null or coalesce((f_params->>'up_version')='true', false) then
+   if v_sheet.version_id is Null or coalesce((f_params->>'up_version')='true', false) or v_sheet.version_staus != 'D' then
         insert into meta.version(guid, entity_id, parent_id) values (v_sheet.version_guid, v_sheet.id, v_sheet.version_id)
         returning id into v_sheet.version_id;
 
@@ -301,7 +335,8 @@ begin
             dt.key type_code,   -- тип поля
             dt.eav_field,  -- поле где данное значение лежит в eav
             dat.value,
-            (dea.id is NUll) new_attr
+            (dea.id is NUll) new_attr,
+            col.ref_attribute_id
         from (
             select coalesce((x.value->>'guid')::uuid, uuid_generate_v4()) guid,
                    (x.value->'data') "data",
@@ -334,10 +369,19 @@ begin
             continue;
         end if;
 
-        v_row.value = case
-            when v_row.type_code = 'B' then case when upper(v_row.value) in ('TRUE','ДА','YES','Y','1','T','Д') then '1' else '0' end
-            else v_row.value
-        end;
+        if v_row.type_code = 'B' then
+            v_row.value = case when upper(v_row.value) in ('TRUE','ДА','YES','Y','1','T','Д') then '1' else '0' end;
+        elseif v_row.type_code = 'R' then
+            tmp_value = null;
+            select r.id::varchar into tmp_value
+            from data.row r
+            inner join meta.attribute a on a.entity_id = r.entity_id and a.id = v_row.ref_attribute_id
+                and r.guid = v_row.value::uuid;
+            if tmp_value is Null then
+               return jsonb_build_object('error', format('Для поля %s не нацдена строка по ссылке %s', v_row.name, v_row.value));
+            end if;
+            v_row.value = tmp_value;
+        end if;
 
         if v_row.new_attr then
              insert into data.eav(id, version_id, attribute_id, s, i, f, r, t)
@@ -380,7 +424,8 @@ declare
 begin
    select
        coalesce(v1.entity_id, e.id) id,
-       v1.id version_id
+       v1.id version_id,
+       v1.status
    into v_sheet
    from (select 1) fake
    left join meta.version v on v.guid = (f_params->>'version_guid')::uuid
@@ -390,17 +435,64 @@ begin
    if v_sheet.id is Null then
        return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
    end if;
-/*
-   with refs as (
-        select a.id
-        from meta.attribute a
-        inner join meta.data_type td on td.id = a.type_id and td."key"='R'
-        inner join meta.attribute ato on ato.id = a.ref_attribute_id
-        inner join meta.version vto on vto.entity_id = ato.entity_id
-        where a.entity_id = v_sheet.id
-   )
 
- */
+   v_ret = array_to_json(array_agg(row_to_json(r)))::jsonb from (
+        with refs as (
+            -- для каждого ссылочного атрибута версия таблицы, откуда брать по ссылке
+            select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key"
+            from meta.attribute a
+            inner join meta.data_type dt on a.type_id = dt.id and dt.key in ('R', 'M')
+            inner join meta.attribute ato on ato.id = a.ref_attribute_id
+            inner join meta.data_type dto on dto.id = ato.type_id
+            inner join meta.entity eto on eto.id=ato.entity_id
+            inner join meta.version vto on vto.entity_id = eto.id and (v_sheet.status != 'D' or eto.version_id is null or vto.id = eto.version_id)
+            inner join meta.enum e on  e.key = vto.status
+            where e.parent_id = meta.enum_id('version_status') and a.entity_id = v_sheet.id
+            group by a.id, dto.eav_field, dto."key"
+        )
+
+        select r.guid,
+         -- значения атрибутов
+         (SELECT (
+             SELECT jsonb_object_agg(e.key, e.value)
+             FROM jsonb_array_elements(jsonb_agg(
+             case
+               when dt.eav_field='s' then json_build_object(atr.name, eav.s)
+               when dt.key ='B' then json_build_object(atr.name, eav.i=1)
+               when dt.eav_field='i' then json_build_object(atr.name, eav.i)
+               when dt.eav_field='f' then json_build_object(atr.name, eav.f)
+               when dt.eav_field='t' then json_build_object(atr.name, eav.t)
+               when dt.key ='R' and refs.eav_field='s' then json_build_object(atr.name, reav.s)
+               when dt.key ='R' and refs.key='B' then json_build_object(atr.name, reav.i=1)
+               when dt.key ='R' and refs.eav_field='i' then json_build_object(atr.name, reav.i)
+               when dt.key ='R' and refs.eav_field='f' then json_build_object(atr.name, reav.f)
+               when dt.key ='R' and refs.eav_field='t' then json_build_object(atr.name, reav.t)
+               else json_build_object()
+             end
+         )) arr
+         CROSS JOIN LATERAL jsonb_each(arr) e)) data,
+         -- идентификаторы ссылок
+         (SELECT (
+              SELECT jsonb_object_agg(e.key, e.value)
+              FROM jsonb_array_elements(jsonb_agg(
+              case
+                when dt.key ='R' and refs.eav_field='s' then json_build_object(atr.name, geav.guid)
+                else json_build_object()
+              end
+         )) arr
+         CROSS JOIN LATERAL jsonb_each(arr) e)) "references"
+       from meta.version v
+       inner join meta.attribute atr on atr.entity_id = v.entity_id
+       inner join meta.data_type dt on dt.id = atr.type_id
+       inner join data.row r on r.entity_id = v.entity_id
+       left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
+       left join refs on refs.id = atr.id
+       left join data.eav reav on reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
+       left join data.row geav on geav.id = reav.id
+       where v.id = v_sheet.version_id
+       group by r.guid
+   ) r;
+
    return v_ret;
 end
 $$;
