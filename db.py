@@ -29,20 +29,19 @@ def get_sql(file_name):
         if status:
             if line.endswith(status):
                 status = ""
-        else:
-            if ch == ";":
-                line = line.strip()
-                query.append(line)
-                line = ""
-            if ch == "$":
-                status = "$"
-                while script:
-                    status += get_ch()
-                    if status.endswith("$"):
-                        break
-            elif line.endswith("/*"):
-                status = "*/"
-            elif line.endswith("--"):
+        elif ch == ";":
+            line = line.strip()
+            query.append(line)
+            line = ""
+        elif ch == "$":
+            status = "$"
+            while script:
+                status += get_ch()
+                if status.endswith("$"):
+                    break
+        elif line.endswith("/*"):
+            status = "*/"
+        elif line.endswith("--"):
                 status = "\n"
     if line:
         query.append((line + buf).strip())
