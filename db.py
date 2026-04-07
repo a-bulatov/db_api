@@ -48,14 +48,14 @@ def get_sql(file_name):
         query.append((line + buf).strip())
     return query
 
+
 async def process(query_list):
     async with DB_ENV() as env:
         while query_list:
             qry = query_list.pop(0)
-            print(f"{qry}\n", flush=True)
             await env.sql(qry, RAW)
 
 
 if __name__=="__main__" :
-    qry = get_sql(Config("pyproject.toml").defaults["script"])
+    qry = get_sql(Config("config.yaml").defaults["script"])
     run(process(qry))
