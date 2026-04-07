@@ -18,7 +18,7 @@ def api_help(method=None, **kwarggs):
     """
     if method:
         f = Fnc.registry[method]
-        return {"help":f.help}
+        return f.help
     lst = [x for x in Fnc.registry]
     return lst
 
