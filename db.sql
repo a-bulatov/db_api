@@ -209,6 +209,48 @@ end;
 $$;
 
 
+create function meta.sheet_get(f_params jsonb)
+ returns jsonb
+ language plpgsql
+as $$
+declare
+   v_sheet record;
+   v_ret jsonb;
+begin
+   select
+       coalesce(v1.entity_id, e.id) id,
+       v1.id version_id,
+       v1.status
+   into v_sheet
+   from (select 1) fake
+   left join meta.version v on v.guid = (f_params->>'version_guid')::uuid
+   left join meta.entity e on  e.guid = (f_params->>'guid')::uuid
+   left join meta.version v1 on v1.id = coalesce(v.id, e.version_id);
+
+   if v_sheet.id is Null then
+      return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
+   end if;
+
+   return (select jsonb_build_object(
+            'guid', e.guid,
+            'title', e.title,
+            'columns', (select jsonb_agg(x.defs) from (
+                 select jsonb_build_object(
+                      'name', c."name",
+                      'title',c.title,
+                      'type', t.key
+                 ) defs
+                 from meta.attribute c
+                 inner join meta.data_type t on t.id = c.type_id
+                 where c.entity_id=e.id
+                 ) x)
+        )
+        from meta.entity e
+        where e.id = v_sheet.id
+   );
+end;
+$$;
+
 create schema "data"; -----------------------------------------------------------------------------------------
 
 create table "data"."row" (
@@ -413,6 +455,39 @@ begin
 end;
 $$;
 
+create function data.filter(f_version_id bigint, f_params jsonb)
+returns table(id bigint, npp integer)
+language plpgsql
+as $$
+declare
+   v_query text = '';
+   v_limits text;
+   v_version record;
+begin
+   select v.id, v.entity_id
+   into v_version
+   from meta.version v
+   where v.id = f_version_id;
+
+   v_limits = case
+      when (f_params->>'limit') is null
+      then ''
+      else ' limit '||((f_params->>'limit')::int)::varchar
+   end || case
+      when (f_params->>'offset') is null
+      then ''
+      else ' offset '||((f_params->>'offset')::int)::varchar
+   end;
+
+   if (f_params->>'filter') is null and (f_params->>'order') is null then
+     v_query = format($q$select x.id, row_number() over (order by x.id)::integer npp
+          from (select t.id from data.eav_%s t group by id order by t.id
+          %s) x$q$, v_version.id, v_limits);
+   end if;
+
+   return query execute v_query;
+end
+$$;
 
 create function data.sheet_get(f_params jsonb)
 returns jsonb
@@ -485,12 +560,14 @@ begin
        inner join meta.attribute atr on atr.entity_id = v.entity_id
        inner join meta.data_type dt on dt.id = atr.type_id
        inner join data.row r on r.entity_id = v.entity_id
+       inner join data.filter(v.id, f_params) fltr on fltr.id = r.id
        left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
        left join refs on refs.id = atr.id
        left join data.eav reav on reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
        left join data.row geav on geav.id = reav.id
        where v.id = v_sheet.version_id
-       group by r.guid
+       group by r.guid, fltr.npp
+       order by fltr.npp
    ) r;
 
    return v_ret;

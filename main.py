@@ -1,14 +1,16 @@
 from ab_engine import Config, register_rpc, call_json
 from ab_engine.rpc.fnc import Fnc
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, FileResponse
+from starlette.staticfiles import StaticFiles
+from starlette.routing import Mount
 from starlette.routing import Route
 from sys import modules
 from json5 import loads
 
 
 async def homepage(request):
-    return JSONResponse({'hello': 'world'})
+    return FileResponse(path="web/index.html")
 
 
 def api_help(method=None, **kwarggs):
@@ -30,7 +32,8 @@ async def do_call(request):
     :return:
     """
     x = await request.body()
-    x = loads(x.decode())
+    x = x.decode("utf-8")
+    x = loads(x)
     x = await call_json(x)
     return JSONResponse(x)
 
@@ -55,7 +58,8 @@ def init_app(cfg_file):
 
     return Starlette(debug=True, routes=[
         Route("/", endpoint=homepage),
-        Route("/api", endpoint=do_call, methods=['POST'])
+        Route("/api", endpoint=do_call, methods=['POST']),
+        Mount("/static", app=StaticFiles(directory="web/static"), name="static")
     ])
 
 
