@@ -1,17 +1,11 @@
 from ab_engine import Config, register_rpc, call_json
 from ab_engine.rpc.fnc import Fnc
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse, FileResponse
-from starlette.staticfiles import StaticFiles
-from starlette.routing import Mount
+from starlette.responses import JSONResponse
 from starlette.routing import Route
 from sys import modules
 from json5 import loads
-
-
-async def homepage(request):
-    return FileResponse(path="web/index.html")
-
+from web import admin_routes
 
 def api_help(method=None, **kwarggs):
     """
@@ -56,11 +50,7 @@ def init_app(cfg_file):
             case _:
                 register_rpc(x, fnc["function"], help = fnc.get('help'))
 
-    return Starlette(debug=True, routes=[
-        Route("/", endpoint=homepage),
-        Route("/api", endpoint=do_call, methods=['POST']),
-        Mount("/static", app=StaticFiles(directory="web/static"), name="static")
-    ])
+    return Starlette(debug=True, routes=[Route("/api", endpoint=do_call, methods=['POST']),]+admin_routes())
 
 
 app = init_app("config.yaml")

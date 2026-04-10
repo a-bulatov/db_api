@@ -239,9 +239,17 @@ begin
                       'name', c."name",
                       'title',c.title,
                       'type', t.key
-                 ) defs
+                 )||case when t.key in ('E','R','M')
+				 	then jsonb_build_object('reference_guid',c.ref_enum_key)
+					else jsonb_build_object()
+				 end||case when t.key in ('R','M')
+				 	then jsonb_build_object('reference_names',a.name)
+					else jsonb_build_object()
+				 end
+				 defs
                  from meta.attribute c
                  inner join meta.data_type t on t.id = c.type_id
+				 left join meta.attribute a on a.id = c.ref_attribute_id
                  where c.entity_id=e.id
                  ) x)
         )
@@ -249,6 +257,30 @@ begin
         where e.id = v_sheet.id
    );
 end;
+$$;
+
+create function meta.sheet_list(f_params jsonb default null)
+ returns jsonb
+ language plpgsql
+as $$
+begin
+ return jsonb_build_object('guid', uuid_nil(), 'rows',
+    (select array_to_json(array_agg(row_to_json(x)))::jsonb from (
+        select
+          e.guid,
+          v.guid version_guid,
+          e.title,
+          ver.create_date,
+          ver.last_date
+        from meta.entity e
+        inner join (
+          select v.entity_id id, min(v.dt) create_date, max(v.dt) last_date
+          from meta.version v
+          group by v.entity_id
+        ) ver on ver.id = e.id
+        left join meta.version v on v.id = e.version_id
+    ) x));
+end
 $$;
 
 create schema "data"; -----------------------------------------------------------------------------------------
@@ -497,15 +529,22 @@ declare
    v_sheet record;
    v_ret jsonb;
 begin
+   if ((f_params->>'version_guid') is null and (f_params->>'guid') is null) or ((f_params->>'version_guid')::uuid=uuid_nil()) then
+      return meta.sheet_list(f_params);
+   end if;
+
    select
-       coalesce(v1.entity_id, e.id) id,
+       e1.id,
+       e1.guid,
        v1.id version_id,
+       v1.guid version_guid,
        v1.status
    into v_sheet
    from (select 1) fake
    left join meta.version v on v.guid = (f_params->>'version_guid')::uuid
    left join meta.entity e on  e.guid = (f_params->>'guid')::uuid
-   left join meta.version v1 on v1.id = coalesce(v.id, e.version_id);
+   left join meta.version v1 on v1.id = coalesce(v.id, e.version_id)
+   left join meta.entity e1 on e1.id=coalesce(v1.entity_id, e.id);
 
    if v_sheet.id is Null then
        return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
@@ -570,6 +609,6 @@ begin
        order by fltr.npp
    ) r;
 
-   return v_ret;
+   return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
 $$;

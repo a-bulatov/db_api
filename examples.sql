@@ -26,7 +26,8 @@ select meta.sheet_set('{"title":"refs",
 "guid":"631d0a40-3d8d-407e-bd43-d0675fede9fb",
 "columns":[
     {"name": "id", 	"type": "I"},
-    {"name": "ref","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
+    {"name": "ref","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"},
+    {"name": "data_type","type": "E", "reference_guid":"data_type"}
 ]}')
 
 
