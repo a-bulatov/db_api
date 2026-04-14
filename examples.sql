@@ -34,10 +34,21 @@ select meta.sheet_set('{"title":"refs",
 select data.sheet_set('{"guid":"631d0a40-3d8d-407e-bd43-d0675fede9fb",
 "rows":[
 {"data":{"id":1,"ref":"75e8989f-8d03-429e-9233-0e6117880715"}},
-{"data":{"id":2,"ref":"30fa5076-de4d-4bab-9bfa-550d2ff1f6dd"}}
+{"data":{"id":2,"ref":"30fa5076-de4d-4bab-9bfa-550d2ff1f6dd", "data_type":"S"}}
 ]}')
 
+select meta.sheet_set('{"title":"multi refs",
+"guid":"6ed9a6ea-af93-47ee-bf43-937304e2f663",
+"columns":[
+    {"name": "id", 	"type": "I"},
+    {"name": "ref","type": "M", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
+]}')
 
+select data.sheet_set('{"title":"multi refs",
+"guid":"6ed9a6ea-af93-47ee-bf43-937304e2f663",
+"rows":[
+{"data":{"id":1,"ref":["3fa7d460-baf9-446b-bc66-f3a8a9db5470", "75e8989f-8d03-429e-9233-0e6117880715"]}}
+]}')
 
 select r.guid,
   (SELECT (

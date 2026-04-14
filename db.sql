@@ -171,7 +171,7 @@ begin
         left join meta.attribute a on a.entity_id = v_sheet.id and a.name = attr.value ->> 'name'
         left join meta.data_type t on t.key = attr.value ->> 'type'
     loop
-        if v_column.type_key = 'R' then
+        if v_column.type_key in ('R','M') then
              select a.id into v_column.ref_attribute_id
              from meta.attribute a
              inner join meta.entity e on e.guid = v_column.ref_guid::uuid and  a.entity_id = e.id and a.name = v_column.ref_names;
@@ -297,9 +297,9 @@ create table "data".eav (
 	attribute_id bigint not null,
 	s text null,
 	i bigint null,
-	f float8 null,
+	f double precision null,
 	t timestamp null,
-	r bigint references data.row(id),
+	r bigint references data.row(id) on delete cascade,
 	constraint eav_pk primary key (id, version_id, attribute_id)
 );
 
@@ -344,6 +344,7 @@ update
     data.eav for each row execute function data.eav_update();
 
 
+
 create function data.sheet_set(f_params jsonb)
   returns jsonb
   language plpgsql
@@ -355,6 +356,7 @@ declare
    tmp_row_guid varchar = '';
    tmp_row_id bigint;
    tmp_value varchar;
+   tmp_rec record;
 begin
    select
        0::bigint "input",
@@ -385,7 +387,6 @@ begin
         insert into meta.version(guid, entity_id, parent_id) values (v_sheet.version_guid, v_sheet.id, v_sheet.version_id)
         returning id into v_sheet.version_id;
 
-        -- создание партиции
         execute 'create table data.eav_'||v_sheet.version_id::varchar||' ( like data.eav including indexes, check(version_id = '||
             v_sheet.version_id::varchar||') ) inherits (data.eav)';
 
@@ -410,7 +411,8 @@ begin
             dt.eav_field,  -- поле где данное значение лежит в eav
             dat.value,
             (dea.id is NUll) new_attr,
-            col.ref_attribute_id
+            col.ref_attribute_id,
+            ra_col.entity_id ref_entity_id
         from (
             select coalesce((x.value->>'guid')::uuid, uuid_generate_v4()) guid,
                    (x.value->'data') "data",
@@ -420,6 +422,7 @@ begin
         left join jsonb_each_text(rows.data) dat on true
         left join data.row db_rows on db_rows.guid = rows.guid and db_rows.entity_id = v_sheet.id
         left join meta.attribute col on col.entity_id = v_sheet.id and col.name = dat.key
+        left join meta.attribute ra_col on ra_col.id = col.ref_attribute_Id
         left join meta.data_type dt on dt.id = col.type_id
         left join data.eav dea on dea.version_id=v_sheet.version_id and dea.id=db_rows.id and dea.attribute_id=col.id
    loop
@@ -434,7 +437,7 @@ begin
                 insert into data.row(entity_id, guid)
                 values (v_sheet.id, v_row.guid::uuid)
                 returning id into tmp_row_id;
-                v_counters.inserted=v_counters.inserted + 1; 
+                v_counters.inserted=v_counters.inserted + 1;
             else
                 tmp_row_id = v_row.id;
                 v_counters.updated=v_counters.updated + 1;
@@ -449,12 +452,24 @@ begin
             tmp_value = null;
             select r.id::varchar into tmp_value
             from data.row r
-            inner join meta.attribute a on a.entity_id = r.entity_id and a.id = v_row.ref_attribute_id
-                and r.guid = v_row.value::uuid;
+            where r.entity_id=v_row.ref_entity_id and r.guid = v_row.value::uuid;
             if tmp_value is Null then
                return jsonb_build_object('error', format('Для поля %s не нацдена строка по ссылке %s', v_row.name, v_row.value));
             end if;
             v_row.value = tmp_value;
+        elseif v_row.type_code = 'M' then
+            select count(*) cnt, sum(case when x.value is null then 0 else 1 end) chk, array_agg(r.guid)::varchar val
+            into tmp_rec
+            from jsonb_array_elements_text(v_row.value::jsonb) x
+            left join data.row r on r.guid=x.value::uuid;
+            if coalesce(tmp_rec.cnt,0::bigint)!=coalesce(tmp_rec.chk,0::bigint) then
+                return jsonb_build_object('error', format('Для поля %s не удалось найти все записи из %s', v_row.name, v_row.value));
+            end if;
+            if tmp_rec.cnt = 0 then
+                v_row.value = NULL;
+            else
+                v_row.value = tmp_rec.val;
+            end if;
         end if;
 
         if v_row.new_attr then
@@ -552,7 +567,7 @@ begin
 
    v_ret = array_to_json(array_agg(row_to_json(r)))::jsonb from (
         with refs as (
-            -- для каждого ссылочного атрибута версия таблицы, откуда брать по ссылке
+            /* получаем список атрибутов с внешними ключами */
             select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key"
             from meta.attribute a
             inner join meta.data_type dt on a.type_id = dt.id and dt.key in ('R', 'M')
@@ -563,14 +578,35 @@ begin
             inner join meta.enum e on  e.key = vto.status
             where e.parent_id = meta.enum_id('version_status') and a.entity_id = v_sheet.id
             group by a.id, dto.eav_field, dto."key"
+			union all
+			/* перечисления */
+			select a.id, e.id version_id, null, null
+            from meta.attribute a
+            inner join meta.data_type dt on a.type_id = dt.id and dt.key = 'E'
+			inner join meta.enum e on e.parent_id is null and e.key = a.ref_enum_key
         )
 
         select r.guid,
-         -- значения атрибутов
          (SELECT (
              SELECT jsonb_object_agg(e.key, e.value)
              FROM jsonb_array_elements(jsonb_agg(
              case
+			   when dt.key ='E' then json_build_object(atr.name, enm."name")
+               when dt.key ='M' then json_build_object(atr.name,(
+                    select array_to_json(array_agg(
+                        case
+                          when refs.eav_field='s' then me.s
+                          when refs.eav_field='i' then me.i::text
+                          when refs.eav_field='f' then me.f::text
+                          when refs.eav_field='t' then me.t::text
+                        end
+                    ))
+                    from data.row mr
+                    inner join data.eav me on me.id=mr.id
+                        and me.version_id = refs.version_id
+                        and me.attribute_id = atr.ref_attribute_id
+                    where mr.guid = any(eav.s::uuid[])
+               ))
                when dt.eav_field='s' then json_build_object(atr.name, eav.s)
                when dt.key ='B' then json_build_object(atr.name, eav.i=1)
                when dt.eav_field='i' then json_build_object(atr.name, eav.i)
@@ -584,17 +620,18 @@ begin
                else json_build_object()
              end
          )) arr
-         CROSS JOIN LATERAL jsonb_each(arr) e)) data,
-         -- идентификаторы ссылок
+         CROSS JOIN jsonb_each(arr) e)) data,
          (SELECT (
               SELECT jsonb_object_agg(e.key, e.value)
               FROM jsonb_array_elements(jsonb_agg(
               case
-                when dt.key ='R' and refs.eav_field='s' then json_build_object(atr.name, geav.guid)
+                when dt.key ='R' then json_build_object(atr.name, geav.guid)
+				when dt.key ='E' then json_build_object(atr.name, enm.key)
+				when dt.key ='M' then json_build_object(atr.name, array_to_json(eav.s::uuid[]))
                 else json_build_object()
               end
          )) arr
-         CROSS JOIN LATERAL jsonb_each(arr) e)) "references"
+         CROSS JOIN jsonb_each(arr) e)) "references"
        from meta.version v
        inner join meta.attribute atr on atr.entity_id = v.entity_id
        inner join meta.data_type dt on dt.id = atr.type_id
@@ -602,8 +639,9 @@ begin
        inner join data.filter(v.id, f_params) fltr on fltr.id = r.id
        left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
        left join refs on refs.id = atr.id
-       left join data.eav reav on reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
+       left join data.eav reav on dt.key in ('R','M') and reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
        left join data.row geav on geav.id = reav.id
+	   left join meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
        where v.id = v_sheet.version_id
        group by r.guid, fltr.npp
        order by fltr.npp
