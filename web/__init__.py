@@ -54,41 +54,78 @@ class DbAPI:
 
     async def do_get_db_objects(self, env, **kwargs):
         x = await env.sql("""select 'sh.'||(ns.oid::varchar) id, ns.nspname "text", 'fa fa-table-list' "icon",
-  (select array_to_json(
-	ARRAY[json_build_object('id','functions.'||(ns.oid::varchar),'text','Функции', 'icon','fa fa-computer','nodes',(
-		select array_to_json(array_agg(row_to_json(fnc))) from (
-			select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-minus' "icon"
-			from pg_catalog.pg_proc p
-			where p.pronamespace = ns.oid
-		) fnc
-	))]||  
-	(select array_agg(row_to_json(x)) from(
-	  select case 
-		when c.relkind='r' then 'tbl.'||(c.oid::varchar)
-		when c.relkind='v' then 'v.'||(c.oid::varchar)
-		when c.relkind='m' then 'mv.'||(c.oid::varchar)
-	  end id,
-	  c.relname "text",
-	  case 
-		when c.relkind='r' then 'fa fa-table'
-		when c.relkind='v' then 'fa fa-table-columns'
-		when c.relkind='m' then 'fa fa-table-cells-column-lock'
-	  end "icon",
-	  (select array_to_json(array_agg(row_to_json(fld))) from (
-	     select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-minus' "icon"
-		 from pg_catalog.pg_attribute a
-		 where a.attnum > 0 and a.attrelid = c.oid
-		 order by a.attnum
-	  ) fld ) nodes
-	  from pg_catalog.pg_class c
-	  where c.relnamespace = ns.oid and c.relkind in ('r','v','m')
-	  order by c.relname
-	) x)	
-  )) "nodes"
-from pg_catalog.pg_namespace ns
-where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
-order by ns.nspname""")
+          (select array_to_json(
+            ARRAY[json_build_object('id','functions.'||(ns.oid::varchar),'text','Функции', 'icon','fa fa-computer','nodes',(
+                select array_to_json(array_agg(row_to_json(fnc))) from (
+                    select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-minus' "icon"
+                    from pg_catalog.pg_proc p
+                    where p.pronamespace = ns.oid
+                ) fnc
+            ))]||  
+            (select array_agg(row_to_json(x)) from(
+              select case 
+                when c.relkind='r' then 'tbl.'||(c.oid::varchar)
+                when c.relkind='v' then 'v.'||(c.oid::varchar)
+                when c.relkind='m' then 'mv.'||(c.oid::varchar)
+              end id,
+              c.relname||case when inh.inhparent is null then '' else
+                ' ('||prns.nspname||'.'||prnt.relname||')'
+              end "text",
+              case 
+                when c.relkind='r' then 'fa fa-table'
+                when c.relkind='v' then 'fa fa-table-columns'
+                when c.relkind='m' then 'fa fa-table-cells-column-lock'
+              end "icon",
+              (select array_to_json(array_agg(row_to_json(fld))) from (
+                 select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-minus' "icon"
+                 from pg_catalog.pg_attribute a
+                 where a.attnum > 0 and a.attrelid = c.oid
+                 order by a.attnum
+              ) fld ) nodes
+              from pg_catalog.pg_class c
+              left join pg_catalog.pg_inherits inh on inh.inhrelid = c.oid
+              left join pg_catalog.pg_class prnt on prnt.oid=inh.inhparent
+              left join pg_catalog.pg_namespace prns on prns.oid=prnt.relnamespace
+              where c.relnamespace = ns.oid and c.relkind in ('r','v','m')
+              order by c.relname
+            ) x)	
+          )) "nodes"
+        from pg_catalog.pg_namespace ns
+        where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
+        order by ns.nspname""")
         return x
+
+    async def do_get_info(self, env, id, **kwargs):
+        id =id.split('.', 1)
+        match(id[0]):
+            case "sh": return await self.schema_info(env, id[1])
+            case "functions": return await self.functions_info(env, id[1])
+            case "fn": return await self.function_info(env, id[1])
+            case "tbl": return await self.table_info(env, id[1])
+            case "v": return await self.table_info(env, id[1])
+            case "atr": return await self.attribute_info(env, id[1])
+        return "????"
+
+    async def schema_info(self, env, id):
+        return f"-- схема { id }"
+
+    async def functions_info(self, env, id):
+        return f"-- функции { id }"
+
+    async def function_info(self, env, id):
+        return f"-- функция { id }"
+
+    async def table_info(self, env, id):
+        return f"-- таблица { id }"
+
+    async def view_info(self, env, id):
+        return f"-- представление { id }"
+
+    async def mat_view_info(self, env, id):
+        return f"-- мат. представление { id }"
+
+    async def attribute_info(self, env, id):
+        return f"-- aтрибут { id }"
 
 _PREFIX = ""
 
@@ -103,6 +140,7 @@ async def home_page(request):
 
 async def db_page(request):
     x = html("web/db.html")
+    #x = html("web/example1.html")
     async with DB_ENV() as env:
         db = await env.sql("select current_database()", ONE)
     x=x.replace("{{DB_NAME}}",db)
