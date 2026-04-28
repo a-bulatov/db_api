@@ -1,8 +1,7 @@
-from starlette.responses import  HTMLResponse, Response
+from starlette.responses import  HTMLResponse, Response, JSONResponse
 from starlette.routing import Route
 from mimetypes import guess_type
 import zipfile
-from ab_engine import register_rpc
 from ab_engine.env import DB_ENV
 from ab_engine.db.option import *
 from inspect import iscoroutinefunction
@@ -68,8 +67,9 @@ class DbAPI:
                 when c.relkind='v' then 'v.'||(c.oid::varchar)
                 when c.relkind='m' then 'mv.'||(c.oid::varchar)
               end id,
-              c.relname||case when inh.inhparent is null then '' else
-                ' ('||prns.nspname||'.'||prnt.relname||')'
+              c.relname||case when inh.inhparent is null then '' 
+                when prns.oid = c.relnamespace then ' ('||prnt.relname||')'
+                else ' ('||prns.nspname||'.'||prnt.relname||')'
               end "text",
               case 
                 when c.relkind='r' then 'fa fa-table'
@@ -91,12 +91,14 @@ class DbAPI:
             ) x)	
           )) "nodes"
         from pg_catalog.pg_namespace ns
-        where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
+        -- where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
+        where ns.nspname not in ('pg_catalog', 'information_schema')
         order by ns.nspname""")
         return x
 
     async def do_get_info(self, env, id, **kwargs):
-        id =id.split('.', 1)
+        id =list(id.split('.', 1))
+        id[1] = int(id[1])
         match(id[0]):
             case "sh": return await self.schema_info(env, id[1])
             case "functions": return await self.functions_info(env, id[1])
@@ -107,13 +109,67 @@ class DbAPI:
         return "????"
 
     async def schema_info(self, env, id):
-        return f"-- схема { id }"
+        inf = await env.sql("""select n.nspname "name",
+        (select pg_size_pretty(SUM(pg_total_relation_size(c.oid)))
+        from pg_catalog.pg_class c
+        where  c.relnamespace = n.oid) "size",
+        obj_description(n.oid, 'pg_namespace') "comment",
+        r.rolname "owner"
+        from pg_catalog.pg_namespace n
+        inner join pg_catalog.pg_roles r on n.nspowner = r.oid
+        where n.oid = $1""", id, ROW, OBJECT)
+
+        ret = f"""-- Схема: '{inf.name}' владелец: '{inf.owner}' oid: {id}  занимает: {inf.size}
+
+create schema /*if not exists*/ "{inf.name}";
+
+comment on schema "{inf.name}" is {"NULL" if inf.comment is None else "'"+inf.comment+"'"};
+
+/*
+
+drop schema if exist "{inf.name}" cascade; -- удалить  схему и связанные объекты в других схемах
+
+grant usage on schema "{inf.name}" to <пользователь>; -- дать права на использование схемы
+grant create on schema "{inf.name}" to <пользователь>; -- дать права на создание объектов в схеме
+grant all on schema "{inf.name}" to <пользователь>; -- дать все права на объекты в схеме
+
+revoke usage on schema "{inf.name}" to <пользователь>; -- отозвать права на использование схемы
+revoke create on schema "{inf.name}" to <пользователь>; -- отозвать права на создание объектов в схеме
+revoke all on schema "{inf.name}" to <пользователь>; -- отозвать все права на объекты в схеме
+"""
+        try:
+            usr = await env.sql("""select x.rolname, x.create, x.usage
+            from (
+            select rolname,
+              pg_catalog.has_schema_privilege(rolname, $1, 'CREATE') AS "create",
+              pg_catalog.has_schema_privilege(rolname, $1, 'USAGE') AS "usage"
+            from pg_catalog.pg_roles
+            ) x
+            where x.create or x.usage""", inf.name, OBJECT)
+            ret +="\nПрава на создание объектов:\n" + ", ".join([x.rolname for x in usr if x.create])
+            ret +="\n\nПрава на использование объектов:\n" + ", ".join([x.rolname for x in usr if x.usage])
+        except  Exception as err:
+            ...
+        return ret + "\n\n*/"
 
     async def functions_info(self, env, id):
-        return f"-- функции { id }"
+        ret = await env.sql("""select x.nspname "schema", array_to_json(array_agg(x.defs)) "defs"
+        from (
+        select p.proname ||' (' || pg_get_function_arguments(p.oid) ||') -> '||t.typname||
+            case when  d.description is null then '' else ' -- '||(string_to_array(d.description, chr(10))::varchar[])[1] end defs,
+            n.nspname 
+        from pg_catalog.pg_proc p
+        inner join pg_catalog.pg_namespace n on p.pronamespace = n.oid
+        inner join pg_catalog.pg_type t on p.prorettype = t.oid
+        left join pg_catalog.pg_description d on p.oid = d.objoid
+        where p.prokind in ('f', 'p', 'a') and n.oid  = $1 
+        order by p.proname) x group by x.nspname""", id,  ROW, OBJECT)
+        ret = f"/*\nФункции схемы { ret.schema}:\n\n " + "\n ".join(ret.defs) + "\n\n*/"
+        return ret
 
     async def function_info(self, env, id):
-        return f"-- функция { id }"
+        ret = await env.sql("select pg_get_functiondef($1)",id,ONE)
+        return ret
 
     async def table_info(self, env, id):
         return f"-- таблица { id }"
@@ -127,6 +183,9 @@ class DbAPI:
     async def attribute_info(self, env, id):
         return f"-- aтрибут { id }"
 
+    async def do_sql(self, env, sql, **kwargs):
+        return "SQL!!"
+
 _PREFIX = ""
 
 def html(file_name):
@@ -139,8 +198,20 @@ async def home_page(request):
     return HTMLResponse(x)
 
 async def db_page(request):
+    if request.method=="POST": # запрос на выполнение команды в базе данных
+        x = await request.json()
+        if x.get("method","") != "db":
+            return {"error": "Bad method"}
+        async with DB_ENV() as env:
+            try:
+                x = await DbAPI()(env, **x["params"])
+                x = {"result": x}
+            except Exception as e:
+                if env.in_transaction:
+                    await env.rollback()
+                x = {"error": str(e)}
+        return JSONResponse(x)
     x = html("web/db.html")
-    #x = html("web/example1.html")
     async with DB_ENV() as env:
         db = await env.sql("select current_database()", ONE)
     x=x.replace("{{DB_NAME}}",db)
@@ -156,9 +227,8 @@ def admin_routes(url_prefix:str="", use_db=True) -> list[Route]:
         Route(url_prefix+"/js/{path:path}",  endpoint=StaticFiles("web/js")),
     ]
     if use_db:
-        register_rpc('db', DbAPI)
         ret+=[
-            Route(url_prefix+"/db", endpoint=db_page),
+            Route(url_prefix+"/db", endpoint=db_page, methods=["GET","POST"]),
             Route(url_prefix+"/fontawesome/{path:path}", endpoint=StaticFiles("web/lib/fontawesome.zip"))
             ]
     return ret
