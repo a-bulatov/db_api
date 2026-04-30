@@ -11,8 +11,8 @@ new w2layout({
                  active: 'info',
                  tabs: [
                      { id: 'info', text: 'Определение' },
-                     { id: 'console', text: 'Консоль' },
                      { id: 'data', text: 'Данные' },
+                     { id: 'console', text: 'Консоль' },
                  ],
                  onClick(event) {
                       let info = document.getElementById('infoEditor')
@@ -23,7 +23,7 @@ new w2layout({
                       cons.style.display = 'none'
                       data.style.display = 'none'
                       run_btn.disabled = event.target == "data"
-                      w2ui.layout.hide('preview');
+                      w2ui.layout.hide('preview')
                       switch(event.target){
                         case("info"):
                            info.style.display = 'block'
@@ -34,27 +34,31 @@ new w2layout({
                            window.console_editor.refresh()
                            break
                         case("data"):
-                           data.style.display = 'block'
-                           w2ui.grid.render('#dataGrid')
+                           refreshData()
                            break
                       }
                  }
             },
             html: `
-                <div id="infoEditor" style="full"></div>
-                <div id="consoleEditor" style="full" hidden></div>
-                <div id="dataGrid" style="width: 100%, ;height: 100%; background-color: #f0f0f0" hidden></div>`
+                <div id="infoEditor" class="full"></div>
+                <div id="consoleEditor" class="full" hidden></div>
+                <div id="dataGrid" class="full" hidden></div>`
          },
          { type: 'preview', size: '50%', resizable: true, hidden: true, style: pstyle, html: `
             <div id="previewError" style="full" hidden></div>
             <div id="previewData" class="tabs" hidden>
               <div id="previewToolbar"></div>
-              <div class="full" hidden id="previewNotify">Контент 1</div>
-              <div class="full" hidden id="previewTable">Контент 2</div>
+              <div class="full" hidden id="previewNotify"><pre id="previewNotifyText"></pre></div>
+              <div class="full" hidden id="previewTable"></div>
             </div>
             </div>
          ` },
-     ]
+     ],
+     onResizing: function(event) {
+         let table = document.getElementById('previewTable')
+         let pv = w2ui.layout.get('preview')
+         table.style.height=(pv.height - 50).toString() + "px"
+     }
  })
 
 new w2toolbar({
@@ -76,12 +80,30 @@ new w2toolbar({
                 notify.style.display = 'block'
                 break
             case ('data') :
-                table.style.display = 'block'
                 notify.style.display = 'none'
+                table.style.display = 'block'
+                let pv = w2ui.layout.get('preview')
+                table.style.height=(pv.height - 50).toString() + "px"
                 break
         }
     }
 })
+
+new w2grid({
+   name: 'result_grid',
+   box:'#previewTable',
+   columns: [
+   ],
+   records: [
+   ]})
+
+new w2grid({
+  name: 'data_grid',
+  box:"#dataGrid",
+  columns: [
+  ],
+  records: [
+  ]})
 
 
 new w2sidebar({
@@ -96,37 +118,37 @@ new w2sidebar({
     name: 'sidebar',
     nodes: [],
     onClick: function (event) {
+         let main = w2ui.layout.get('main')
+         if(main.tabs.active != "console") w2ui.layout.hide('preview')
          getNodeInfo(event.target)
+         if(main.tabs.active == "data") refreshData(event.target)
     },
 })
 
 w2ui.layout.html('left', w2ui.sidebar)
 
-
-new w2grid({
-  name: 'grid',
-  show: {
-      toolbar: true,
-      toolbarDelete: true
-  },
-  columns: [
-      { field: 'fname', text: 'First Name', size: '33%', sortable: true, searchable: true },
-      { field: 'lname', text: 'Last Name', size: '33%', sortable: true, searchable: true },
-      { field: 'email', text: 'Email', size: '33%' },
-      { field: 'sdate', text: 'Start Date', size: '120px', render: 'date' }
-  ],
-  records: [
-      { recid: 1, fname: 'John', lname: 'Doe', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 2, fname: 'Stuart', lname: 'Motzart', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 3, fname: 'Jin', lname: 'Franson', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 4, fname: 'Susan', lname: 'Ottie', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 5, fname: 'Kelly', lname: 'Silver', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 6, fname: 'Francis', lname: 'Gatos', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 7, fname: 'Mark', lname: 'Welldo', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 8, fname: 'Thomas', lname: 'Bahh', email: 'jdoe@gmail.com', sdate: '4/3/2012' },
-      { recid: 9, fname: 'Sergei', lname: 'Rachmaninov', email: 'jdoe@gmail.com', sdate: '4/3/2012' }
-  ]})
-
+function refreshData(id=0){
+     if (id==0) id = w2ui.sidebar.selected
+     fetch('/db', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({"method": "db", "params":{"do": "get_data", "id": id}})
+    }).then(response => response.json())
+    .then(result => {
+        let main = w2ui.layout.get('main')
+        let data = document.getElementById('dataGrid')
+        data.style.display = 'block'
+        data.style.height=(main.height - 50).toString() + "px"
+        let grid = w2ui.data_grid
+        grid.columns = result.result.columns
+        grid.records = result.result.records
+        grid.render("#dataGrid")
+        grid.refresh()
+    })
+    .catch(error => console.error('Error:', error))
+}
 
 
 function refreshMeta(){
@@ -138,7 +160,7 @@ function refreshMeta(){
       body: JSON.stringify({"method": "db", "params":{"do": "get_db_objects"}})
     }).then(response => response.json())
     .then(result => {
-          let sel = null;
+          let sel = null
           let sidebar= w2ui.sidebar
           if (sidebar.nodes.length > 0) sel=sidebar.selected[0]
           let nodeIds = sidebar.nodes.map(n => n.id)
@@ -150,10 +172,11 @@ function refreshMeta(){
           sidebar.refresh()
           sidebar.click(sel)
     })
-    .catch(error => console.error('Error:', error));
+    .catch(error => console.error('Error:', error))
 }
 
 function getNodeInfo(id){
+    w2ui.layout.get('main').tabs.disable('data')
     fetch('/db', {
         method: 'POST',
         headers: {
@@ -162,7 +185,12 @@ function getNodeInfo(id){
         body: JSON.stringify({"method": "db", "params":{"do": "get_info", "id": id}})
     }).then(response => response.json())
     .then(result => {
-            window.info_editor.setValue(result.result)
+        let tabs = w2ui.layout.get('main').tabs
+        window.info_editor.setValue(result.result)
+        if("tv".includes(id[0])) {
+            w2ui.layout.get('main').tabs.enable('data')
+        } else
+        if(tabs.active == "data") tabs.click("info")
     })
     .catch(error => console.error('Error:', error))
 }
@@ -183,10 +211,10 @@ window.onload = function() {
      mode: 'sql',
      theme: 'idea',
      matchBrackets:true
-   });
+   })
 
-   refreshMeta();
-};
+   refreshMeta()
+}
 
 function refreshClick(){
     refreshMeta()
@@ -201,19 +229,37 @@ function runClick(){
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({"method": "db", "params":{"do": "sql", "sql": btoa(sql_text)}})
+        body: JSON.stringify({"method": "db", "params":{"do": "sql", "sql_b64": btoa(sql_text)}})
     }).then(response => response.json())
     .then(result => {
-        let data = document.getElementById('previewData')
-        let error = document.getElementById('previewError')
-        let notify = document.getElementById('previewNotify')
-        let table = document.getElementById('previewTable')
-        error.style.display = 'none'
-        data.style.display = 'block'
-        table.style.display = 'none'
-        notify.style.display = 'block'
-        console.log(result.result)
-        w2ui.layout.show('preview');
+        let data = document.getElementById("previewData")
+        let error = document.getElementById("previewError")
+        let notify = document.getElementById("previewNotify")
+        let notify_text = document.getElementById("previewNotifyText")
+        let table = document.getElementById("previewTable")
+        error.style.display = "none"
+        data.style.display = "block"
+        table.style.display = "none"
+        notify.style.display = "block"
+
+        notify_text.innerText = result.result.notice
+        if ("columns" in result.result) {
+            w2ui.previewToolbar.enable("data")
+            w2ui.result_grid.columns = result.result.columns
+            w2ui.result_grid.records = result.result.records
+            w2ui.result_grid.render("#previewTable")
+
+            setTimeout(
+              () => {
+                w2ui.previewToolbar.click("data")
+                w2ui.result_grid.refresh()
+              },
+              500
+            )
+        } else {
+            w2ui.previewToolbar.disable("data")
+        }
+        w2ui.layout.show("preview")
     })
     .catch(error => console.error('Error:', error))
 }

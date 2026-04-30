@@ -2,9 +2,54 @@ from starlette.responses import  HTMLResponse, Response, JSONResponse
 from starlette.routing import Route
 from mimetypes import guess_type
 import zipfile
+import base64
+import json
 from ab_engine.env import DB_ENV
 from ab_engine.db.option import *
 from inspect import iscoroutinefunction
+from datetime import datetime
+
+def get_sql(script):
+    line, query, status, buf = "", [], "", ""
+
+    def get_ch():
+        nonlocal buf, script, line
+        if buf == "":
+            if len(script) == 0:
+                return ""
+            buf = script[0]
+            script = script[1:]
+            if buf.strip().startswith("--") or buf == "":
+                buf = ""
+                return get_ch()
+        ch = buf[0]
+        buf = buf[1:]
+        line += ch
+        return ch
+
+    while script:
+        ch = get_ch()
+        if status:
+            if line.endswith(status):
+                status = ""
+        elif ch == ";":
+            line = line.strip()
+            query.append(line)
+            line = ""
+        elif ch == "$":
+            status = "$"
+            while script:
+                status += get_ch()
+                if status.endswith("$"):
+                    break
+        elif line.endswith("/*"):
+            status = "*/"
+        elif line.endswith("--"):
+            status = "\n"
+    if line:
+        query.append((line + buf).strip())
+    return query
+
 
 class StaticFiles:
     def __init__(self, zip_path: str):
@@ -183,10 +228,54 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
     async def attribute_info(self, env, id):
         return f"-- aтрибут { id }"
 
-    async def do_sql(self, env, sql, **kwargs):
-        return "SQL!!"
+    async def do_sql(self, env, sql_b64="", sql="", **kwargs):
+        env.rollback()
+        sql = sql if sql else base64.b64decode(sql_b64).decode("utf-8")
+        sql = get_sql(sql)
+        notify = []
+        try:
+            async with DB_ENV(notify=notify) as env:
+                t = datetime.now()
+                for x in sql:
+                    ret = await env.sql(x, RAW)
+                t = datetime.now() - t
+        except Exception as e:
+            ret = None
+            notify.append(f"\nОШИБКА !!!\n{e}")
+        notify.insert(0,f"Время выполнения {t}")
+        if len(sql) == 1 and isinstance(ret, list) and len(ret):
+            perc = f"{100 // len(ret[0])}%"
+            hdr = []
+            for x in ret[0]:
+                hdr.append({ "field": x, "text": x, "size": perc, "sortable": True, "searchable": True })
+            for n, x in enumerate(ret):
+                x = json.dumps(x, ensure_ascii=False, default=str)
+                x = json.loads(x)
+                x["recid"] = n
+                ret[n] = x
+            ret = {"records": ret, "columns": hdr, "notice": notify}
+        elif len(sql) == 1:
+            if isinstance(ret, int) and ret > 0:
+                notify.append(f"Обработано {ret} строк")
+            ret = {"notice": notify}
+        else:
+            ret = {"notice": notify}
+        ret["notice"] = "\n".join(ret["notice"])
+        return ret
 
-_PREFIX = ""
+    async def do_get_data(self, env, id, **kwargs):
+        if not isinstance(id, int):
+            id = str(id).split('.')[-1]
+            id = int(id)
+        query = await env.sql("""select quote_ident(n.nspname)||'.'||quote_ident(r.relname)
+        from pg_catalog.pg_namespace n
+        inner join pg_catalog.pg_class r on r.relnamespace = n.oid
+        where r.oid = $1""", id, ONE)
+        query = f"select * from {query} limit 500"
+        ret = await self.do_sql(env, sql=query)
+        return ret
+
+_PREFIX = "" # префикс URL
 
 def html(file_name):
     with open(file_name) as f:
