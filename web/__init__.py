@@ -72,7 +72,6 @@ class StaticFiles:
             response = Response("Not Found", status_code=404)
             await response(scope, receive, send)
 
-
 class DbAPI:
     """
     обработка команд для работы с БД
@@ -129,7 +128,7 @@ class DbAPI:
               ) fld ) nodes
               from pg_catalog.pg_class c
               left join pg_catalog.pg_inherits inh on inh.inhrelid = c.oid
-              left join pg_catalog.pg_class prnt on prnt.oid=inh.inhparent
+              left join pg_catalog.pg_class prnt on prnt.oid=inh.inhparent and inh.inhseqno = 1
               left join pg_catalog.pg_namespace prns on prns.oid=prnt.relnamespace
               where c.relnamespace = ns.oid and c.relkind in ('r','v','m')
               order by c.relname
@@ -149,7 +148,8 @@ class DbAPI:
             case "functions": return await self.functions_info(env, id[1])
             case "fn": return await self.function_info(env, id[1])
             case "tbl": return await self.table_info(env, id[1])
-            case "v": return await self.table_info(env, id[1])
+            case "v": return await self.view_info(env, id[1], False)
+            case "mv": return await self.view_info(env, id[1], True)
             case "atr": return await self.attribute_info(env, id[1])
         return "????"
 
@@ -164,7 +164,7 @@ class DbAPI:
         inner join pg_catalog.pg_roles r on n.nspowner = r.oid
         where n.oid = $1""", id, ROW, OBJECT)
 
-        ret = f"""-- Схема: '{inf.name}' владелец: '{inf.owner}' oid: {id}  занимает: {inf.size}
+        ret = f"""-- Схема: {inf.name} владелец: {inf.owner} oid: {id}  занимает: {inf.size}
 
 create schema /*if not exists*/ "{inf.name}";
 
@@ -217,13 +217,54 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         return ret
 
     async def table_info(self, env, id):
-        return f"-- таблица { id }"
+        t = await env.sql("""select 
+          quote_ident(n.nspname)||'.'||quote_ident(r.relname) t,
+          quote_ident(pns.nspname)||'.'||quote_ident(pn.relname) p,
+          rl.rolname own,
+          r.reltuples cnt,
+          pg_size_pretty(pg_total_relation_size(r.oid)) sz
+        from pg_catalog.pg_class r
+        inner join pg_catalog.pg_namespace n on n.oid = r.relnamespace
+        inner join pg_roles rl on r.relowner = rl.oid
+        left join pg_catalog.pg_inherits inh on inh.inhseqno = 1 and inh.inhrelid = r.oid
+        left join pg_catalog.pg_class pn on pn.oid = inh.inhparent
+        left join pg_catalog.pg_namespace pns on pns.oid = pn.relnamespace
+        where r.oid = $1""", id, ROW)
+        if t['cnt'] < 0:
+            t['cnt'] = await env.sql(f"select count(*) from only {t['t']}", ONE)
+            t['acc'] = ""
+        else:
+            t['acc'] = "примерно "
+        ret = f"-- Таблица: {t['t']} владелец: {t['own']} oid: {id}\n-- {t['acc']}{t['cnt']} строк. занимает: {t['sz']}\n\n"
+        ret += f"create table {t['t']} (\n"
+        if t['p'] is not None:
+            ret +=f"        like {t['p']} including all /* indexes, constraints, defaults, comments */\n) inherits ({t['p']});\n"
+        else:
+            attrs = await env.sql("""select
+                a.attname "name",
+                pg_catalog.format_type(a.atttypid, a.atttypmod) "type",
+                pg_catalog.col_description(a.attrelid, a.attnum) "description",
+                a.attnotnull not_null,
+                pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) "default"
+            from pg_catalog.pg_attribute a
+            left join pg_attrdef ad on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+            where a.attnum>0 and a.attrelid = $1
+            order by a.attnum""", id, OBJECT)
+            for x in attrs:
+                ret+=f"    {x.name} {x.type}"
+                if x.not_null:
+                    ret += " not null"
+                if x.default:
+                    ret += f" {x.default}"
+                ret += ",\n"
+            ret = ret[:-2]+"\n); \n"
+        return ret
 
-    async def view_info(self, env, id):
+
+    async def view_info(self, env, id, materialized):
+        if materialized:
+            return f"-- мат. представление { id }"
         return f"-- представление { id }"
-
-    async def mat_view_info(self, env, id):
-        return f"-- мат. представление { id }"
 
     async def attribute_info(self, env, id):
         return f"-- aтрибут { id }"
