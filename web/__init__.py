@@ -216,6 +216,104 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         ret = await env.sql("select pg_get_functiondef($1)",id,ONE)
         return ret
 
+    async def create_table_scripts(self, env, id)->str:
+        ret = ""
+        defs = await env.sql("""select
+                a.attname "name",
+                pg_catalog.format_type(a.atttypid, a.atttypmod) "type",
+                pg_catalog.col_description(a.attrelid, a.attnum) "description",
+                a.attnotnull not_null,
+                pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) "default"
+            from pg_catalog.pg_attribute a
+            left join pg_attrdef ad on a.attrelid = ad.adrelid and a.attnum = ad.adnum
+            where a.attnum>0 and a.attrelid = $1
+            order by a.attnum""", id, OBJECT)
+        for x in defs:
+            add_def = True
+            if str(x.default).startswith("nextval('"):
+                add_def =False
+                match x.type:
+                    case 'bigint':  ret+=f"    {x.name} bigserial"
+                    case 'int':  ret+=f"    {x.name} serial"
+                    case 'integer':  ret+=f"    {x.name} serial"
+                    case 'smallint':  ret+=f"    {x.name} smallserial"
+            else:
+                ret+=f"    {x.name} {x.type}"
+            if x.not_null:
+                ret += " not null"
+            if x.default and add_def:
+                ret += f" {x.default}"
+            ret += ",\n"
+        ret = ret[:-2]+"\n); \n"
+        defs = await env.sql("""select jsonb_build_object(
+            'schema', quote_ident(ns.nspname),
+            'table', quote_ident(tbl.relname),
+            'name', cons.conname,
+            'type', case cons.contype
+                when 'c' then 'CHECK'
+                when 'f' then 'FOREIGN KEY'
+                when 'p' then 'PRIMARY KEY'
+                when 'u' then 'UNIQUE'
+                when 't' then 'TRIGGER'
+                when 'x' then 'EXCLUSION'
+                else cons.contype::varchar || '??'
+            end
+        )
+        || case
+            when cons.contype = 'c'
+                then jsonb_build_object()
+                else jsonb_build_object('columns', (
+                    select array_agg(quote_ident(x.attname)) from(
+                        select fa.attname from (
+                        select row_number() over () n, unnest v
+                        from unnest(cons.conkey)
+                        ) x
+                        inner join pg_catalog.pg_attribute fa on fa.attnum = x.v and fa.attrelid=tbl.oid
+                        order by x.n
+                    ) x
+                ))
+            end
+        || case cons.contype
+            when 'f' then jsonb_build_object('references',
+                (select jsonb_build_object('schema', quote_ident(tons.nspname), 'table', quote_ident(tot.relname),
+                    'columns', (
+                        select array_agg(quote_ident(x.attname)) from(
+                            select fa.attname from (
+                            select row_number() over () n, unnest v
+                            from unnest(cons.confkey)
+                            ) x
+                            inner join pg_catalog.pg_attribute fa on fa.attnum = x.v and fa.attrelid=cons.confrelid
+                            order by x.n
+                        ) x
+                    )
+                )
+                from pg_catalog.pg_class tot
+                inner join pg_catalog.pg_namespace tons on tons.oid = tot.relnamespace
+                where tot.oid = cons.confrelid)
+            )
+            when 'c' then jsonb_build_object('expression', pg_catalog.pg_get_constraintdef(cons.oid, true))
+            else jsonb_build_object()
+        end as "value"
+        from pg_catalog.pg_constraint cons
+        inner join pg_catalog.pg_namespace ns on cons.connamespace = ns.oid
+        inner join pg_catalog.pg_class tbl on cons.conrelid = tbl.oid
+        where TBL.OID = $1""", id)
+        for x in defs:
+            x = x['value']
+            x['columns']=', '.join(x['columns'])
+            if x.get("references"):
+                x["references"]['columns'] = ', '.join(x["references"]['columns'])
+            ret += f"\nalter table {x['schema']}.{x['table']} add constraint {x['name']} "
+            match x['type']:
+                case "FOREIGN KEY":
+                    ret += f"foreign key({x['columns']}) references {x['references']['schema']}.{x['references']['table']}({x['references']['columns']}"
+                case "CHECK":
+                    ret += f"check ({x['expression']}"
+                case _:
+                    ret += f" {x['type'].lower()} ({x['columns']}"
+            ret+=");\n"
+        return ret
+
     async def table_info(self, env, id):
         t = await env.sql("""select 
           quote_ident(n.nspname)||'.'||quote_ident(r.relname) t,
@@ -238,26 +336,11 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         ret = f"-- Таблица: {t['t']} владелец: {t['own']} oid: {id}\n-- {t['acc']}{t['cnt']} строк. занимает: {t['sz']}\n\n"
         ret += f"create table {t['t']} (\n"
         if t['p'] is not None:
+            # Унаследованная таблица
             ret +=f"        like {t['p']} including all /* indexes, constraints, defaults, comments */\n) inherits ({t['p']});\n"
         else:
-            attrs = await env.sql("""select
-                a.attname "name",
-                pg_catalog.format_type(a.atttypid, a.atttypmod) "type",
-                pg_catalog.col_description(a.attrelid, a.attnum) "description",
-                a.attnotnull not_null,
-                pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) "default"
-            from pg_catalog.pg_attribute a
-            left join pg_attrdef ad on a.attrelid = ad.adrelid and a.attnum = ad.adnum
-            where a.attnum>0 and a.attrelid = $1
-            order by a.attnum""", id, OBJECT)
-            for x in attrs:
-                ret+=f"    {x.name} {x.type}"
-                if x.not_null:
-                    ret += " not null"
-                if x.default:
-                    ret += f" {x.default}"
-                ret += ",\n"
-            ret = ret[:-2]+"\n); \n"
+            # Обычные таблицы
+            ret += await self.create_table_scripts(env, id)
         return ret
 
 
@@ -290,6 +373,9 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
             for x in ret[0]:
                 hdr.append({ "field": x, "text": x, "size": perc, "sortable": True, "searchable": True })
             for n, x in enumerate(ret):
+                for a in x:
+                    if isinstance(x[a],(dict,list)):
+                        x[a] = json.dumps(x[a])
                 x = json.dumps(x, ensure_ascii=False, default=str)
                 x = json.loads(x)
                 x["recid"] = n
