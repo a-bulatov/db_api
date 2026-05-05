@@ -11,6 +11,15 @@ API:
     type: self
     function: api_help
 
+  enum_get:
+    type: db
+    function: meta.enum_get
+    help: |
+      Возвращает список перечислений (если не задан ключ) или перечисление
+      {
+         "key": "ключ перечисления"
+      }
+
   sheet_type_set:
     type: db
     function: meta.sheet_set

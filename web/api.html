@@ -6,7 +6,7 @@
         <link rel="stylesheet" href="/codemirror/lib/codemirror.css">
         <script type="text/javascript" src="/codemirror/lib/codemirror.js"></script>
         <script type="text/javascript" src="/codemirror/mode/javascript/javascript.js"></script>
-        <script type="text/javascript" src="/codemirror/addon/edit/matchbrackets.min.js"></script>
+        <script type="text/javascript" src="/codemirror/addon/edit/matchbrackets.js"></script>
         <link rel="stylesheet"  href="/codemirror/theme/idea.css">
         <link rel="stylesheet" type="text/css" href="/web_ui/w2ui-2.0.min.css">
         <link rel="stylesheet" href="/fontawesome/css/all.css">
@@ -26,9 +26,9 @@
             <label for="method">Метод</label>
             <select name="Method" id="method" class="chan-input">
             </select>
-            <button class="w2ui-btn action" onclick="run()">Старт</button>
-            <button class="w2ui-btn action" onclick="help()">Помощь</button>
-            <button class="w2ui-btn action" onclick="format()">Формат</button>
+            <button class="w2ui-btn action" onclick="run()"><i class="fas fa-play"></i></button>
+            <button class="w2ui-btn action" onclick="help()"><i class="fas fa-question"></i></button>
+            <button class="w2ui-btn action" onclick="format()"><i class="fas fa-bars-staggered"></i></button>
         </div>
         <hr>
         <div id="code"></div>

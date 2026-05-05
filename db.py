@@ -9,9 +9,10 @@ async def main():
     with open(Config("config.yaml").defaults["script"], "r") as f:
         qry = f.readlines()
     async with DB_ENV() as env:
-        ver = await env.sql(f"select version()",ONE)
-        ver = ver.split("(",1)[0].strip().split(" ",1)[1]
-        qry = get_sql(qry,ver)
+        ver = await env.sql(f"select version()", ONE)
+        ver = ver.split(" ", 2)[1].strip().split(".",2)
+        ver = f"{ver[0]}.{ver[1]}"
+        qry = get_sql(qry, ver)
         while qry:
             q = qry.pop(0)
             await env.sql(q, RAW)
