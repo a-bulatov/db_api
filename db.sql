@@ -16,14 +16,14 @@ create unique index meta_enum_uk on meta.enum using btree (coalesce(parent_id, (
 comment on table meta."enum" is 'хранилище перечислений';
 
 create function meta.enum_id(enum_key varchar(100))
- returns bigint
+ returns integer
  language sql
  stable
 as
 $$
 select id from meta.enum where parent_id is null and key = enum_key;
 $$;
-comment on function meta.enum_id is 'Возвращает ID перечисления по ключу';
+comment on function meta.enum_id(varchar) is 'Возвращает ID перечисления по ключу';
 
 create function meta.enum_keys(enum_key varchar(100))
  returns varchar[]
@@ -36,7 +36,7 @@ from meta.enum t
 inner join meta.enum v on v.parent_id=t.id
 where t.parent_id is null and t.key = enum_key;
 $$;
-comment on function meta.enum_keys is 'Возврашает список ключей перечисления';
+comment on function meta.enum_keys(varchar) is 'Возврашает список ключей перечисления';
 
 insert into meta.enum("key", "name")
 values
@@ -334,14 +334,14 @@ end
 $$;
 
 create trigger eav_insert_trigger before
-insert
-    on
-    data.eav for each row execute function data.eav_insert();
+insert on data.eav for each row execute
+!!..9.6!! procedure data.eav_insert();
+!!10..!!  function data.eav_insert();
 
 create trigger eav_update_trigger before
-update
-    on
-    data.eav for each row execute function data.eav_update();
+update on data.eav for each row execute
+!!..9.6!! procedure data.eav_update();
+!!10..!!  function data.eav_update();
 
 
 
@@ -620,7 +620,9 @@ begin
                else json_build_object()
              end
          )) arr
-         CROSS JOIN jsonb_each(arr) e)) data,
+         CROSS JOIN
+!!..9.6!!         LATERAL
+         jsonb_each(arr) e)) "data",
          (SELECT (
               SELECT jsonb_object_agg(e.key, e.value)
               FROM jsonb_array_elements(jsonb_agg(
@@ -631,7 +633,9 @@ begin
                 else json_build_object()
               end
          )) arr
-         CROSS JOIN jsonb_each(arr) e)) "references"
+         CROSS JOIN
+!!..9.6!!         LATERAL
+         jsonb_each(arr) e)) "references"
        from meta.version v
        inner join meta.attribute atr on atr.entity_id = v.entity_id
        inner join meta.data_type dt on dt.id = atr.type_id

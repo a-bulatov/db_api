@@ -9,8 +9,11 @@ from ab_engine.db.option import *
 from inspect import iscoroutinefunction
 from datetime import datetime
 
-def get_sql(script):
+
+def get_sql(script:list, version=None):
     line, query, status, buf = "", [], "", ""
+    if version is not None:
+        version = float(version)
 
     def get_ch():
         nonlocal buf, script, line
@@ -19,9 +22,30 @@ def get_sql(script):
                 return ""
             buf = script[0]
             script = script[1:]
-            if buf.strip().startswith("--") or buf == "":
+            bs = buf.strip()
+            if bs.startswith("--") or buf == "":
                 buf = ""
                 return get_ch()
+            elif bs.startswith("!!"):
+                if version is None:
+                    buf = ""
+                    return get_ch()
+                bs, buf = bs[2:].split("!!", 1)
+                bs = bs.strip()
+                while "..." in bs:
+                    bs = bs.replace("...","..")
+                bs =bs.split("..")
+                if len(bs)==3:
+                    bs = float(bs[0].strip())<=version<=float(bs[1].strip())
+                elif len(bs)==2 and bs[0]=="":
+                    bs = version <= float(bs[1])
+                elif len(bs)==2 and bs[1]=="":
+                    bs = version >= float(bs[0])
+                else:
+                    bs = False
+                if not bs:
+                    buf = ""
+                    return get_ch()
         ch = buf[0]
         buf = buf[1:]
         line += ch
