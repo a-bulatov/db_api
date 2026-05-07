@@ -20,18 +20,19 @@
         </style>
     </head>
     <body>
-    <h1>API</h1>
     <div class="demo">
+        <div>Параметры</div>
+        <hr>
+        <div id="code"></div>
+        <hr>
         <div class="input-group">
             <label for="method">Метод</label>
             <select name="Method" id="method" class="chan-input">
             </select>
-            <button class="w2ui-btn action" onclick="run()"><i class="fas fa-play"></i></button>
-            <button class="w2ui-btn action" onclick="help()"><i class="fas fa-question"></i></button>
-            <button class="w2ui-btn action" onclick="format()"><i class="fas fa-bars-staggered"></i></button>
+            <button class="w2ui-btn action" onclick="run()" title="Выполнить"><i class="fas fa-play"></i></button>
+            <button class="w2ui-btn action" onclick="help()" title="Получить описание метода"><i class="fas fa-question"></i></button>
+            <button class="w2ui-btn action" onclick="format()" title="Форматировать json"><i class="fas fa-bars-staggered"></i></button>
         </div>
-        <hr>
-        <div id="code"></div>
     </div>
     <div id="finite-output" class="output">
     </div>

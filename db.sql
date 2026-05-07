@@ -591,91 +591,85 @@ begin
        return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
    end if;
 
-   v_ret = array_to_json(array_agg(row_to_json(r)))::jsonb from (
-        with refs as (
-            /* получаем список атрибутов с внешними ключами */
-            select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key"
-            from meta.attribute a
-            inner join meta.data_type dt on a.type_id = dt.id and dt.key in ('R', 'M')
-            inner join meta.attribute ato on ato.id = a.ref_attribute_id
-            inner join meta.data_type dto on dto.id = ato.type_id
-            inner join meta.entity eto on eto.id=ato.entity_id
-            inner join meta.version vto on vto.entity_id = eto.id and (v_sheet.status != 'D' or eto.version_id is null or vto.id = eto.version_id)
-            inner join meta.enum e on  e.key = vto.status
-            where e.parent_id = meta.enum_id('version_status') and a.entity_id = v_sheet.id
-            group by a.id, dto.eav_field, dto."key"
-			union all
-			/* перечисления */
-			select a.id, e.id version_id, null, null
-            from meta.attribute a
-            inner join meta.data_type dt on a.type_id = dt.id and dt.key = 'E'
-			inner join meta.enum e on e.parent_id is null and e.key = a.ref_enum_key
-        )
+   with refs as (
+       -- получаем список атрибутов с внешними ключами
+       select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key"
+           from meta.attribute a
+           inner join meta.data_type dt on a.type_id = dt.id and dt.key in ('R', 'M')
+           inner join meta.attribute ato on ato.id = a.ref_attribute_id
+           inner join meta.data_type dto on dto.id = ato.type_id
+           inner join meta.entity eto on eto.id=ato.entity_id
+           inner join meta.version vto on vto.entity_id = eto.id and (v_sheet.status != 'D' or eto.version_id is null or vto.id = eto.version_id)
+           inner join meta.enum e on  e.key = vto.status
+           where e.parent_id = meta.enum_id('version_status') and a.entity_id = v_sheet.id
+           group by a.id, dto.eav_field, dto."key"
+       union all
+       -- перечисления
+       select a.id, e.id version_id, null, null
+           from meta.attribute a
+           inner join meta.data_type dt on a.type_id = dt.id and dt.key = 'E'
+           inner join meta.enum e on e.parent_id is null and e.key = a.ref_enum_key
+   )
 
-        select r.guid,
-         (SELECT (
-             SELECT jsonb_object_agg(e.key, e.value)
-             FROM jsonb_array_elements(jsonb_agg(
-             case
-			   when dt.key ='E' then json_build_object(atr.name, enm."name")
-               when dt.key ='M' then json_build_object(atr.name,(
-                    select array_to_json(array_agg(
-                        case
-                          when refs.eav_field='s' then me.s
-                          when refs.eav_field='i' then me.i::text
-                          when refs.eav_field='f' then me.f::text
-                          when refs.eav_field='t' then me.t::text
-                        end
-                    ))
-                    from data.row mr
-                    inner join data.eav me on me.id=mr.id
-                        and me.version_id = refs.version_id
-                        and me.attribute_id = atr.ref_attribute_id
-                    where mr.guid = any(eav.s::uuid[])
-               ))
-               when dt.eav_field='s' then json_build_object(atr.name, eav.s)
-               when dt.key ='B' then json_build_object(atr.name, eav.i=1)
-               when dt.eav_field='i' then json_build_object(atr.name, eav.i)
-               when dt.eav_field='f' then json_build_object(atr.name, eav.f)
-               when dt.eav_field='t' then json_build_object(atr.name, eav.t)
-               when dt.key ='R' and refs.eav_field='s' then json_build_object(atr.name, reav.s)
-               when dt.key ='R' and refs.key='B' then json_build_object(atr.name, reav.i=1)
-               when dt.key ='R' and refs.eav_field='i' then json_build_object(atr.name, reav.i)
-               when dt.key ='R' and refs.eav_field='f' then json_build_object(atr.name, reav.f)
-               when dt.key ='R' and refs.eav_field='t' then json_build_object(atr.name, reav.t)
-               else json_build_object()
-             end
-         )) arr
-         CROSS JOIN
-!!..9.6!!         LATERAL
-         jsonb_each(arr) e)) "data",
-         (SELECT (
-              SELECT jsonb_object_agg(e.key, e.value)
-              FROM jsonb_array_elements(jsonb_agg(
-              case
-                when dt.key ='R' then json_build_object(atr.name, geav.guid)
-				when dt.key ='E' then json_build_object(atr.name, enm.key)
-				when dt.key ='M' then json_build_object(atr.name, array_to_json(eav.s::uuid[]))
-                else json_build_object()
-              end
-         )) arr
-         CROSS JOIN
-!!..9.6!!         LATERAL
-         jsonb_each(arr) e)) "references"
-       from meta.version v
-       inner join meta.attribute atr on atr.entity_id = v.entity_id
-       inner join meta.data_type dt on dt.id = atr.type_id
-       inner join data.row r on r.entity_id = v.entity_id
-       inner join data.filter(v.id, f_params) fltr on fltr.id = r.id
-       left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
-       left join refs on refs.id = atr.id
-       left join data.eav reav on dt.key in ('R','M') and reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
-       left join data.row geav on geav.id = reav.id
-	   left join meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
-       where v.id = v_sheet.version_id
-       group by r.guid, fltr.npp
-       order by fltr.npp
-   ) r;
+   select jsonb_agg(
+     jsonb_strip_nulls(jsonb_build_object('guid', x.guid, 'data', x.data, 'references', x.refs))
+   )
+   into v_ret
+   from (
+   select r.guid,
+     -- значения атрибутов
+     jsonb_object_agg(atr.name,
+     case
+         when dt.key='E' then to_jsonb(enm.name)
+         when dt.key='B' then to_jsonb(eav.i=1)
+         when dt.eav_field='i' then to_jsonb(eav.i)
+         when dt.eav_field='f' then to_jsonb(eav.f)
+         when dt.eav_field='t' then to_jsonb(eav.t)
+         when dt.key ='R' and refs.eav_field='s' then to_jsonb(reav.s)
+         when dt.key ='R' and refs.key='B' then to_jsonb(reav.i=1)
+         when dt.key ='R' and refs.eav_field='i' then to_jsonb(reav.i)
+         when dt.key ='R' and refs.eav_field='f' then to_jsonb(reav.f)
+         when dt.key ='R' and refs.eav_field='t' then to_jsonb(reav.t)
+         when dt.key ='M' then to_jsonb((
+             select array_agg(
+                 case
+                   when refs.eav_field='s' then me.s
+                   when refs.eav_field='i' then me.i::text
+                   when refs.eav_field='f' then me.f::text
+                   when refs.eav_field='t' then me.t::text
+                 end
+             )
+             from data.row mr
+             inner join data.eav me on me.id=mr.id
+                 and me.version_id = refs.version_id
+                 and me.attribute_id = atr.ref_attribute_id
+             where mr.guid = any(eav.s::uuid[])
+         )) -- M
+         else to_jsonb(eav.s)
+     end
+     ) "data",
+     -- ссылки
+     nullif(jsonb_strip_nulls(jsonb_object_agg(atr.name,
+     case
+       when dt.key ='R' then to_jsonb(geav.guid)
+       when dt.key ='E' then to_jsonb(enm.key)
+       when dt.key ='M' then to_jsonb(array_to_json(eav.s::uuid[]))
+     end
+     )), '{}'::jsonb) refs
+    from meta.version v
+    inner join meta.attribute atr on atr.entity_id = v.entity_id
+    inner join meta.data_type dt on dt.id = atr.type_id
+    inner join data.row r on r.entity_id = v.entity_id
+    inner join data.filter(v.id, f_params) fltr on fltr.id = r.id
+    left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
+    left join refs on refs.id = atr.id
+    left join data.eav reav on dt.key in ('R','M') and reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
+    left join data.row geav on geav.id = reav.id
+    left join meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
+    where v.id = v_sheet.version_id
+    group by r.guid, fltr.npp
+    order by fltr.npp
+   ) x;
 
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end

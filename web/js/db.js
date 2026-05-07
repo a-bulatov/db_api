@@ -92,6 +92,31 @@ new w2toolbar({
 new w2grid({
    name: 'result_grid',
    box:'#previewTable',
+   contextMenu: [
+         { id: 'refresh', text: 'Обновить', icon: 'w2ui-icon-empty' },
+         { text: '--' },
+         { id: 'clipbrd', text: 'Поле в буфер', icon: 'w2ui-icon-pencil' },
+         { id: 'view', text: 'Показать', icon: 'w2ui-icon-info' },
+     ],
+     onContextMenuClick(event) {
+         let { recid, column, index } = event.detail
+         let val = this.getCellCopy(recid, column)
+         switch(event.detail.menuItem.id) {
+               case "refresh":
+                   runClick()
+                   break
+               case "clipbrd":
+                   copyToClipboard(String(val))
+                   break
+               case "view":
+                   w2popup.open({
+                       title: this.columns[column].text,
+                       text: String(val),
+                       resizable: true
+                   })
+                   break
+         }
+     },
    columns: [
    ],
    records: [
@@ -100,11 +125,36 @@ new w2grid({
 new w2grid({
   name: 'data_grid',
   box:"#dataGrid",
+  show: { lineNumbers: true },
+  contextMenu: [
+      { id: 'refresh', text: 'Обновить', icon: 'w2ui-icon-empty' },
+      { text: '--' },
+      { id: 'clipbrd', text: 'Поле в буфер', icon: 'w2ui-icon-pencil' },
+      { id: 'view', text: 'Показать', icon: 'w2ui-icon-info' },
+  ],
+  onContextMenuClick(event) {
+      let { recid, column, index } = event.detail
+      let val = this.getCellCopy(recid, column)
+      switch(event.detail.menuItem.id) {
+            case "refresh":
+                refreshData()
+                break
+            case "clipbrd":
+                copyToClipboard(String(val))
+                break
+            case "view":
+                w2popup.open({
+                    title: this.columns[column].text,
+                    text: String(val),
+                    resizable: true
+                })
+                break
+      }
+  },
   columns: [
   ],
   records: [
   ]})
-
 
 new w2sidebar({
     topHTML: `<div style="background-color: #eee; padding: 10px 5px; border-bottom: 1px solid silver">
@@ -202,7 +252,10 @@ window.onload = function() {
      value: '',
      mode: 'sql',
      theme: 'idea',
-     matchBrackets:true
+     matchBrackets:true,
+     extraKeys: {
+       "Shift-Tab": "indentLess"
+     }
    })
    window.console_editor = CodeMirror(document.getElementById('consoleEditor'), {
      lineNumbers: true,
@@ -210,7 +263,10 @@ window.onload = function() {
      value: '',
      mode: 'sql',
      theme: 'idea',
-     matchBrackets:true
+     matchBrackets:true,
+     extraKeys: {
+      "Shift-Tab": "indentLess"
+     }
    })
 
    refreshMeta()
@@ -229,7 +285,7 @@ function runClick(){
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({"method": "db", "params":{"do": "sql", "sql_b64": btoa(sql_text)}})
+        body: JSON.stringify({"method": "db", "params":{"do": "sql", "sql_b64": btoa(unescape(encodeURIComponent(sql_text)))}})
     }).then(response => response.json())
     .then(result => {
         let data = document.getElementById("previewData")
@@ -262,4 +318,17 @@ function runClick(){
         w2ui.layout.show("preview")
     })
     .catch(error => console.error('Error:', error))
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textArea);
+  }
 }

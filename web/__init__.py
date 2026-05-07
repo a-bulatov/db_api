@@ -324,7 +324,8 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         where TBL.OID = $1""", id)
         for x in defs:
             x = x['value']
-            x['columns']=', '.join(x['columns'])
+            if cl := x.get("columns"):
+                x["columns"]=', '.join(cl)
             if x.get("references"):
                 x["references"]['columns'] = ', '.join(x["references"]['columns'])
             ret += f"\nalter table {x['schema']}.{x['table']} add constraint {x['name']} "
