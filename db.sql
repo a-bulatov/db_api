@@ -2,8 +2,10 @@ drop schema if exists meta cascade;
 drop schema if exists data cascade;
 
 create extension if not exists "uuid-ossp";
+create schema "meta";
+create schema "data";
+-- МЕТАДАННЫЕ ---------------------------------------------------------------------------------------
 
-create schema "meta"; -----------------------------------------------------------------------------------------
 
 create table meta."enum" (
 	id serial not null primary key,
@@ -41,7 +43,8 @@ comment on function meta.enum_keys(varchar) is 'Возврашает списо�
 insert into meta.enum("key", "name")
 values
 ('data_type', 'Типы данных'),
-('version_status','Статусы версии')
+('version_status','Статусы версии'),
+('entity_type','Типы таблиц')
 ;
 
 create table meta.data_type ( like meta."enum" including indexes, check(parent_id =  meta.enum_id('data_type')) ) inherits (meta."enum");
@@ -51,13 +54,16 @@ alter table meta.data_type alter column parent_id set default meta.enum_id('data
 
 insert into meta.data_type("key","name","eav_field")
 values ('R','Ссылка','r'),
+       ('r','Связанная сылка','s'),
        ('M','Множество ссылок','s'),
        ('I','Целое','i'),
        ('F','Дробное число','f'),
        ('S','Строка','s'),
+       ('G','Уникальный идентификатор','s'),
        ('T','Дата/Время','t'),
        ('B','Логическое значение','i'),
        ('E','Список значений из справочника','s');
+
 
 insert into meta.enum(key, name, parent_id)
 select x.column1, x.column2, meta.enum_id('version_status')
@@ -70,14 +76,29 @@ from (values
 order by x.column3;
 
 
+insert into meta.enum(key, name, parent_id)
+select x.column1, x.column2, meta.enum_id('entity_type')
+from (values
+  ('EAV', 'Логическая таблица'),
+  ('SYS', 'Системная таблица'), -- на системные таблицы нельзя ссылаться
+  ('PGT', 'Таблица postgresql')
+) x;
+
+
 create table meta.entity (
 	id bigserial not null primary key,
 	guid uuid unique default uuid_generate_v4() not null,
-	title varchar(250) null
+	title varchar(250) null,
+	f_read varchar(100),
+	f_write varchar(100),
+	entity_type char(3) not null default 'EAV'::char(3),
+	constraint entity_type_check check(entity_type = any(meta.enum_keys('entity_type')))
 );
 comment on table meta.entity is 'список таблиц';
 comment on column meta.entity.guid is 'глобальный идентификатор таблицы';
 comment on column meta.entity.title is 'наименование таблицы для отображения';
+comment on column meta.entity.f_read is 'метод чтения. если задан то нельзя менять структуру таблицы';
+comment on column meta.entity.f_write is 'метод записи. Если пусто, но задан метод чтения, значит можно только читать данные';
 
 create table meta."version" (
 	id bigserial not null primary key,
@@ -144,38 +165,64 @@ as $$
 declare
     v_sheet record;
     v_column record;
-    ret json;
+    v_ret json;
+    v_force boolean;
 begin
     if coalesce(f_params::varchar,'{}')='{}' then
         return jsonb_build_object('error', 'структура таблицы не задана');
     end if;
 
+    v_force = coalesce((f_params ->> 'force')::boolean,false);
+
     select
         e.id,
         (e.id is null) is_new,
         coalesce((f_params->>'guid')::uuid, e.guid, uuid_generate_v4()) guid,
-        coalesce(f_params->>'title', e.title) title,
+        coalesce(f_params->>'title', e.title, '') title,
         coalesce(v.id, e.version_id) from_version_id,
         (e.id is null) or (coalesce((f_params->>'up_version')='true', false)) up_version,
-        e.version_id
+        case when f_params ? 'read_method'  and v_force then f_params->>'read_method' else e.f_read end f_read,
+        case when f_params ? 'write_method' and v_force then f_params->>'write_method' else e.f_write end f_write,
+        e.version_id,
+        e.f_read is not null custom_read,
+        coalesce(e.entity_type, f_params->>'entity_type', 'EAV') entity_type
     into v_sheet
     from (select 1) fake
     left join meta.version v on v.guid = (f_params->>'version_guid')::uuid
     left join meta.entity e on e.version_id = v.id or (v.id is null and e.guid = (f_params->>'guid')::uuid);
 
     if v_sheet.id is null then
-        insert into meta.entity(guid, title)
-        values (v_sheet.guid, v_sheet.title)
+        insert into meta.entity(guid, title, f_read, f_write, entity_type)
+        values (v_sheet.guid, v_sheet.title, v_sheet.f_read, v_sheet.f_write, v_sheet.entity_type)
         returning id into v_sheet.id;
     else
         update meta.entity set
-         title = v_sheet.title
+         title = v_sheet.title,
+         f_read= v_sheet.f_read,
+         f_wirte=v_sheet.f_write,
+         entity_type = v_sheet.entity_type
         where id = v_sheet.id;
     end if;
 
-    if v_sheet.up_version then
-        ret = data.sheet_set(jsonb_build_object('guid', v_sheet.guid, 'version_guid', (f_params->>'version_guid'), 'up_version', true));
-        if (ret->>'error') is not null then
+    if v_sheet.custom_read and (f_params->>'columns') is not Null and not v_force then
+         return jsonb_buildobject('error',format('Запрещены изменения структуры таблицы %s', e.title));
+    end if;
+
+    if v_sheet.up_version and v_sheet.entity_type in ('SYS','PGT') then
+        insert into meta.version(guid, entity_id)
+        values (uuid_generate_v4(), v_sheet.id)
+        returning id into v_sheet.version_id;
+
+        update meta.entity
+        set version_id = v_sheet.version_id
+        where id = v_sheet.id;
+    elseif v_sheet.up_version then
+        v_ret = data.sheet_set(jsonb_build_object(
+          'guid', v_sheet.guid,
+          'version_guid', (f_params->>'version_guid'),
+          'up_version', true)
+        );
+        if (v_ret->>'error') is not null then
             return ret;
         end if;
         select version_id
@@ -291,11 +338,21 @@ create function meta.sheet_list(f_params jsonb default null)
 as $$
 begin
  return jsonb_build_object('guid', uuid_nil(), 'rows',
-    (select array_to_json(array_agg(row_to_json(x)))::jsonb from (
+    (select array_to_json(array_agg(
+        jsonb_build_object(
+             'guid',x.guid,
+             'dtata', jsonb_build_object(
+                  'name', x."name",
+                  'version_guid', x.version_guid,
+                  'create_date', x.create_date,
+                  'last_date', x.last_date
+             )
+        )
+    ))::jsonb from (
         select
           e.guid,
           v.guid version_guid,
-          e.title,
+          e.title "name",
           ver.create_date,
           ver.last_date
         from meta.entity e
@@ -309,7 +366,39 @@ begin
 end
 $$;
 
-create schema "data"; -----------------------------------------------------------------------------------------
+select meta.sheet_set('
+{
+    "guid": "00000000-0000-0000-0000-000000000000",
+    "title": "Таблицы",
+    "force": true,
+    "entity_type": "SYS",
+    "read_method": "meta.sheet_list",
+    "columns": [
+      {
+        "name": "name",
+        "title":"Наименование таблицы",
+        "type": "S"
+      },
+      {
+        "name": "version_guid",
+        "title":"Идентипфикатор версии",
+        "type": "G"
+      },
+      {
+        "name": "create_date",
+        "title":"Дата создания",
+        "type": "T"
+      },
+      {
+        "name": "last_date",
+        "title":"Дата модификации",
+        "type": "T"
+      }
+    ]
+}
+');
+
+-- ДАННЫЕ -----------------------------------------------------------------------------------------
 
 create table "data"."row" (
 	id bigserial  primary key,
@@ -474,6 +563,8 @@ begin
 
         if v_row.type_code = 'B' then
             v_row.value = case when upper(v_row.value) in ('TRUE','ДА','YES','Y','1','T','Д') then '1' else '0' end;
+        elseif v_row.type_code = 'G' then
+            v_row.value = (v_row.value::uuid)::varchar;
         elseif v_row.type_code = 'R' then
             tmp_value = null;
             select r.id::varchar into tmp_value
@@ -569,9 +660,10 @@ as $$
 declare
    v_sheet record;
    v_ret jsonb;
+   t_tmp text;
 begin
-   if ((f_params->>'version_guid') is null and (f_params->>'guid') is null) or ((f_params->>'version_guid')::uuid=uuid_nil()) then
-      return meta.sheet_list(f_params);
+   if f_params is null or f_params::varchar='{}'  then
+      f_params = jsonb_build_object('guid', uuid_nil());
    end if;
 
    select
@@ -579,13 +671,20 @@ begin
        e1.guid,
        v1.id version_id,
        v1.guid version_guid,
-       v1.status
+       v1.status,
+       e1.f_read
    into v_sheet
    from (select 1) fake
    left join meta.version v on v.guid = (f_params->>'version_guid')::uuid
    left join meta.entity e on  e.guid = (f_params->>'guid')::uuid
    left join meta.version v1 on v1.id = coalesce(v.id, e.version_id)
    left join meta.entity e1 on e1.id=coalesce(v1.entity_id, e.id);
+
+   if v_sheet.f_read is not Null then
+        t_tmp = format($q$select %s('%s')$q$, v_sheet.f_read,f_params);
+        execute t_tmp into v_ret;
+        return v_ret;
+   end if;
 
    if v_sheet.id is Null then
        return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
@@ -674,3 +773,4 @@ begin
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
 $$;
+
