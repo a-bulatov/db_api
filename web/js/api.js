@@ -87,5 +87,5 @@ function help(){
 
 function format(){
    let params = getParams()
-   editor.setValue(JSON.stringify(params), null, 4)
+   editor.setValue(JSON.stringify(params, null, 4))
 };

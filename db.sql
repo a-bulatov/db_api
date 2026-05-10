@@ -703,9 +703,30 @@ begin
     then
         return query select null::bigint row_id, null::bigint attr_id, null::jsonb "value" where 1<>1;
     end if;
-    -- получить значения дополнительных полей по ссылке:
-      -- получить таблицу из каждого связанного атрибута (по ref_attribute_id)
-      -- получить актуальную версию каждой таблицы
+
+    for v_attr in
+      select e.guid, a.ref_enum_key, a.id, a.ref_attribute_id, r.id r_id
+      from meta.version v
+      inner join meta.attribute r on r.entity_id = v.entity_id
+      inner join meta.data_type t on t.key = 'r' and t.id = r.type_id
+      inner join meta.attribute a on a.id = r.ref_attribute_id
+      inner join meta.entity e on e.id = a.entity_id
+      where v.id = f_version_id
+    loop
+      if v_query!='' then v_query = format('%s union all ', query); end if;
+      v_query = format($q$
+      select ev.id row_id, %s attr_id, v.value->'data'->'%s' "value"
+	  from jsonb_array_elements(data.sheet_get('{"guid":"%s","fields":["%s"]}')->'rows') v
+      inner join data.row w on w.guid = (v.value->>'guid')::uuid
+      inner join data.eav_%s ev on ev.r = w.id and ev.attribute_id = %s
+      $q$, v_attr.r_id, v_attr.ref_enum_key, v_attr.guid, v_attr.ref_enum_key, f_version_id, v_attr.ref_attribute_id);
+    end loop;
+
+    if v_query = '' then
+      return query select null::bigint row_id, null::bigint attr_id, null::jsonb "value" where 1<>1;
+    else
+      return query execute v_query;
+    end if;
 end
 $$;
 
@@ -717,6 +738,7 @@ declare
    v_sheet record;
    v_ret jsonb;
    t_tmp text;
+   v_fields varchar(100)[];
 begin
    if f_params is null or f_params::varchar='{}'  then
       f_params = jsonb_build_object('guid', uuid_nil());
@@ -746,8 +768,13 @@ begin
        return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
    end if;
 
+   if (f_params->>'fields') is not null then
+      select array_agg(elem::varchar)
+      into v_fields
+	  from jsonb_array_elements_text(f_params->'fields') AS elem;
+   end if;
+
    with refs as (
-       -- получаем список атрибутов с внешними ключами
        select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key"
            from meta.attribute a
            inner join meta.data_type dt on a.type_id = dt.id and dt.key in ('R', 'M')
@@ -759,7 +786,6 @@ begin
            where e.parent_id = meta.enum_id('version_status') and a.entity_id = v_sheet.id
            group by a.id, dto.eav_field, dto."key"
        union all
-       -- перечисления
        select a.id, e.id version_id, null, null
            from meta.attribute a
            inner join meta.data_type dt on a.type_id = dt.id and dt.key = 'E'
@@ -772,7 +798,6 @@ begin
    into v_ret
    from (
    select r.guid,
-     -- значения атрибутов
      jsonb_object_agg(atr.name,
      case
          when dt.key='E' then to_jsonb(enm.name)
@@ -780,7 +805,6 @@ begin
          when dt.eav_field='i' then to_jsonb(eav.i)
          when dt.eav_field='f' then to_jsonb(eav.f)
          when dt.eav_field='t' then to_jsonb(eav.t)
-         when dt.key ='r' then rv."value"
          when dt.key ='R' and refs.eav_field='s' then to_jsonb(reav.s)
          when dt.key ='R' and refs.key='B' then to_jsonb(reav.i=1)
          when dt.key ='R' and refs.eav_field='i' then to_jsonb(reav.i)
@@ -804,7 +828,6 @@ begin
          else to_jsonb(eav.s)
      end
      ) "data",
-     -- ссылки
      nullif(jsonb_strip_nulls(jsonb_object_agg(atr.name,
      case
        when dt.key ='R' then to_jsonb(geav.guid)
@@ -818,12 +841,12 @@ begin
     inner join data.row r on r.entity_id = v.entity_id
     inner join data.filter(v.id, f_params) fltr on fltr.id = r.id
     left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
-    left join  data.ref_vals(v.id) rv on dt.key='r' and rv.row_id = r.id and rv.attr_id = atr.id
+    left join  data.ref_vals(v.id) rv on rv.row_id = r.id and rv.attr_id = atr.id
     left join  refs on refs.id = atr.id
     left join  data.eav reav on dt.key in ('R','M') and reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
     left join  data.row geav on geav.id = reav.id
     left join  meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
-    where v.id = v_sheet.version_id
+    where v.id = v_sheet.version_id and (v_fields is null or atr."name" = any(v_fields))
     group by r.guid, fltr.npp
     order by fltr.npp
    ) x;
