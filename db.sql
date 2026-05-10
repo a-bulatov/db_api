@@ -53,16 +53,17 @@ comment on column meta.data_type.eav_field is 'имя поля в таблице
 alter table meta.data_type alter column parent_id set default meta.enum_id('data_type');
 
 insert into meta.data_type("key","name","eav_field")
-values ('R','Ссылка','r'),
-       ('r','Связанная сылка','s'),
-       ('M','Множество ссылок','s'),
-       ('I','Целое','i'),
-       ('F','Дробное число','f'),
-       ('S','Строка','s'),
-       ('G','Уникальный идентификатор','s'),
-       ('T','Дата/Время','t'),
-       ('B','Логическое значение','i'),
-       ('E','Список значений из справочника','s');
+values
+   ('R','Ссылка','r'),
+   ('r','Связанная сылка','s'),
+   ('M','Множество ссылок','s'),
+   ('I','Целое','i'),
+   ('F','Дробное число','f'),
+   ('S','Строка','s'),
+   ('G','Уникальный идентификатор','s'),
+   ('T','Дата/Время','t'),
+   ('B','Логическое значение','i'),
+   ('E','Список значений из справочника','s');
 
 
 insert into meta.enum(key, name, parent_id)
@@ -199,7 +200,7 @@ begin
         update meta.entity set
          title = v_sheet.title,
          f_read= v_sheet.f_read,
-         f_wirte=v_sheet.f_write,
+         f_write=v_sheet.f_write,
          entity_type = v_sheet.entity_type
         where id = v_sheet.id;
     end if;
@@ -236,8 +237,8 @@ begin
             coalesce(attr->>'name', a.name) "name",
             coalesce(t.id, a.type_id) type_id,
             coalesce(attr->>'title', a.title) title,
-            (attr.value ->>'reference_guid') ref_guid,
-            (('{'||replace(replace(coalesce(attr.value ->>'reference_name', attr.value ->>'reference_names'), '[', ''), ']', '')||'}')::varchar[])[1] ref_names,
+            coalesce(attr.value ->>'reference', (attr.value ->>'reference_guid')::uuid::varchar) ref_guid,
+            coalesce(attr.value ->>'reference_column', (('{'||replace(replace(attr.value ->>'reference_names', '[', ''), ']', '')||'}')::varchar[])[1]) ref_names,
             null::bigint ref_attribute_id,
             t.key type_key
         from jsonb_array_elements(f_params->'columns') attr
@@ -252,6 +253,25 @@ begin
              if v_column.ref_attribute_id is null then
                 return jsonb_build_object('error', format('Не найден ссылочный атрибут %s для поля %s', v_column.ref_names, v_column.name));
              end if;
+        elseif v_column.type_key = 'r' then
+             select a.id into v_column.ref_attribute_id
+             from meta.attribute a
+             where a.entity_id = v_sheet.id and a.name = v_column.ref_guid;
+
+             if v_column.ref_attribute_id is null then
+                return jsonb_build_object('error', format('В таблице нет ссылочного атрибута %s', v_column.ref_guid));
+             end if;
+
+             if not exists(select 1
+                  from meta.attribute st
+                  inner join meta.attribute et on et.id = st.ref_attribute_id
+                  inner join meta.attribute tt on tt.entity_id = et.entity_id
+                  where st.id = v_column.ref_attribute_id and tt.name = v_column.ref_names)
+             then
+                  return jsonb_build_object('error', format('В таблице по ссылке нет атрибута %s', v_column.ref_names));
+             end if;
+
+             v_column.ref_guid = v_column.ref_names;
         elseif v_column.type_key = 'E' then
              if not exists(select 1 from meta.enum where parent_id is null and "key"=v_column.ref_guid) then
                 return jsonb_build_object('error',format('Не найден перечислимый тип %s', v_column.ref_guid));
@@ -313,12 +333,24 @@ begin
                       'title',c.title,
                       'type', t.key
                  )||case when t.key in ('E','R','M')
-				 	then jsonb_build_object('reference_guid',c.ref_enum_key)
+				 	then jsonb_build_object(
+				 	    'reference',c.ref_enum_key,
+				 	    'reference_guid',c.ref_enum_key -- старый вариант. удалить !!
+				 	)
 					else jsonb_build_object()
 				 end||case when t.key in ('R','M')
-				 	then jsonb_build_object('reference_names',a.name)
+				 	then jsonb_build_object(
+				 	    'reference_column',a.name,
+				 	    'reference_names',a.name -- старый вариант. удалить !!
+				 	)
 					else jsonb_build_object()
-				 end
+				 end||case when t.key = 'r'
+                    then jsonb_build_object(
+                        'reference',a.name,
+                        'reference_column', c.ref_enum_key
+                    )
+                    else jsonb_build_object()
+                 end
 				 defs
                  from meta.attribute c
                  inner join meta.data_type t on t.id = c.type_id
@@ -425,9 +457,11 @@ create function data.eav_insert()
  security definer
 as $$
 begin
-  execute 'insert into data.eav_' || new.version_id ||' values ($1.*)'
-  using new;
-  return null;
+    execute format(
+      'insert into data.eav_%s values ($1.*)',
+      new.version_id
+    ) using new;
+    return null;
 end
 $$;
 
@@ -437,14 +471,13 @@ create function data.eav_update()
  security definer
 as $$
 begin
-  execute 'update data.eav_' || new.version_id ||' set'||
-      ' s='||case when new.s is null then 'null' else quote_literal(new.s) end||
-      ' i='||case when new.i is null then 'null' else new.i::varchar end||
-      ' f='||case when new.f is null then 'null' else new.f::varchar end||
-      ' r='||case when new.r is null then 'null' else new.r::varchar end||
-      ' t='||case when new.t is null then 'null' else quote_literal(new.t::varchar) end||
-      ' where id='||new.id::varchar||' and attribute_id='||new.attribute_id::varchar;
-  return null;
+    execute format(
+      $q$update data.eav_%I set s=%L, i=%L, f=%L, r=%L, t='%s' where id=%L and attribute_id=%L$q$,
+      new.version_id,
+      new.s, new.i, new.f, new.r, new.t,
+      new.id, new.attribute_id
+    );
+    return null;
 end
 $$;
 
@@ -587,6 +620,9 @@ begin
             else
                 v_row.value = tmp_rec.val;
             end if;
+        elseif v_row.type_code = 'r' then
+            --return jsonb_build_object('error', format('Запись в составные ссылочные поля запрещена (%s)', v_row.name));
+            continue;
         end if;
 
         if v_row.new_attr then
@@ -650,6 +686,26 @@ begin
    end if;
 
    return query execute v_query;
+end
+$$;
+
+create function data.ref_vals(f_version_id bigint)
+returns table(row_id bigint, attr_id bigint, "value" jsonb)
+language plpgsql
+as $$
+declare
+    v_query text = '';
+    v_attr record;
+begin
+    if not exists(select 1 from meta.attribute a
+        inner join meta.version v on a.entity_id = v.entity_id and v.id = f_version_id
+        inner join meta.data_type t on a.type_id = t.id and t.key ='r')
+    then
+        return query select null::bigint row_id, null::bigint attr_id, null::jsonb "value" where 1<>1;
+    end if;
+    -- получить значения дополнительных полей по ссылке:
+      -- получить таблицу из каждого связанного атрибута (по ref_attribute_id)
+      -- получить актуальную версию каждой таблицы
 end
 $$;
 
@@ -724,6 +780,7 @@ begin
          when dt.eav_field='i' then to_jsonb(eav.i)
          when dt.eav_field='f' then to_jsonb(eav.f)
          when dt.eav_field='t' then to_jsonb(eav.t)
+         when dt.key ='r' then rv."value"
          when dt.key ='R' and refs.eav_field='s' then to_jsonb(reav.s)
          when dt.key ='R' and refs.key='B' then to_jsonb(reav.i=1)
          when dt.key ='R' and refs.eav_field='i' then to_jsonb(reav.i)
@@ -761,10 +818,11 @@ begin
     inner join data.row r on r.entity_id = v.entity_id
     inner join data.filter(v.id, f_params) fltr on fltr.id = r.id
     left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
-    left join refs on refs.id = atr.id
-    left join data.eav reav on dt.key in ('R','M') and reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
-    left join data.row geav on geav.id = reav.id
-    left join meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
+    left join  data.ref_vals(v.id) rv on dt.key='r' and rv.row_id = r.id and rv.attr_id = atr.id
+    left join  refs on refs.id = atr.id
+    left join  data.eav reav on dt.key in ('R','M') and reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
+    left join  data.row geav on geav.id = reav.id
+    left join  meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
     where v.id = v_sheet.version_id
     group by r.guid, fltr.npp
     order by fltr.npp

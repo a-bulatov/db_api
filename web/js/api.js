@@ -23,30 +23,53 @@ window.onload = function() {
                 sel.append(option);
           }
     })
-    .catch(error => console.error('Error:', error));
+    .catch(error => console.error('Error:', error))
 };
 
+function getParams(){
+    let params = editor.getValue().trim()
+    try {
+        if(params.length==0) params='{}'
+        return JSON.parse(params)
+    } catch(e) {
+        fetch('/api', {
+           method: 'POST',
+           headers: {
+            'Content-Type': 'application/json',
+           },
+           body: JSON.stringify({"method": "json_syntax_check", "params":  {
+           "text_b64": btoa(unescape(encodeURIComponent(params)))
+           }})
+        }).then(response => response.json())
+        .then(result => {
+           let out = document.getElementById("finite-output")
+           out.innerHTML = `<pre>${result.result}</pre>`
+        })
+        .catch(error => console.error('Error:', error))
+        throw new Error("Ошибка в JSON")
+    }
+}
+
 function run(){
-    let sel = document.getElementById("method");
-    let method = sel.value;
-    let params = editor.getValue().trim();
-    if(params.length==0) params='{}';
+    let sel = document.getElementById("method")
+    let method = sel.value
+    let params = getParams()
     fetch('/api', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({"method": method, "params":  JSON.parse(params)})
+      body: JSON.stringify({"method": method, "params":  params})
     }).then(response => response.json())
     .then(result => {
           let out = document.getElementById("finite-output");
-          out.innerHTML = `<pre>${JSON.stringify(result, null, 4)}</pre>`;
+          out.innerHTML = `<pre>${JSON.stringify(result, null, 4)}</pre>`
     })
-    .catch(error => console.error('Error:', error));
+    .catch(error => console.error('Error:', error))
 };
 
 function help(){
-    let sel = document.getElementById("method");
+    let sel = document.getElementById("method")
     let method = sel.value;
     fetch('/api', {
       method: 'POST',
@@ -56,13 +79,13 @@ function help(){
       body: JSON.stringify({"method": "help", "params":{"method":method}})
     }).then(response => response.json())
     .then(result => {
-          let out = document.getElementById("finite-output");
-          out.innerHTML = `<pre>${result.result}</pre>`;
+          let out = document.getElementById("finite-output")
+          out.innerHTML = `<pre>${result.result}</pre>`
     })
-    .catch(error => console.error('Error:', error));
+    .catch(error => console.error('Error:', error))
 };
 
 function format(){
-   let params = editor.getValue();
-   editor.setValue(JSON.stringify(JSON.parse(editor.getValue()),null , 4));
+   let params = getParams()
+   editor.setValue(JSON.stringify(params), null, 4)
 };

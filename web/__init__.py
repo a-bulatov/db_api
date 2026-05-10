@@ -6,6 +6,7 @@ import base64
 import json
 from ab_engine.env import DB_ENV
 from ab_engine.db.option import *
+from ab_engine import register_rpc
 from inspect import iscoroutinefunction
 from datetime import datetime
 
@@ -73,6 +74,58 @@ def get_sql(script:list, version=None):
     if line:
         query.append((line + buf).strip())
     return query
+
+
+def check_json(text: str) -> str | None:
+    """
+    Проверяет синтаксис JSON.
+    Возвращает None если ошибок нет, иначе — описание ошибки на русском.
+    """
+    try:
+        json.loads(text)
+        return None
+    except json.JSONDecodeError as e:
+        line = e.lineno
+        col = e.colno
+        pos = e.pos
+
+        lines = text.split("\n")
+        context = ""
+        if 0 <= line - 1 < len(lines):
+            problem_line = lines[line - 1]
+            context = f'\n  {problem_line}'
+            if col and col <= len(problem_line) + 1:
+                context += f'\n  {" " * (col - 1)}^'
+
+        msg = {
+            "Expecting property name enclosed in double quotes":
+                "ожидается имя свойства в двойных кавычках",
+            "Expecting value":
+                "ожидается значение",
+            "Extra data":
+                "лишние данные после завершения JSON",
+            "Expecting ':' delimiter":
+                "ожидается двоеточие после имени свойства",
+            "Expecting ',' delimiter":
+                "ожидается запятая между элементами",
+            "Unterminated string":
+                "незакрытая строка",
+            "Invalid control character":
+                "недопустимый управляющий символ в строке",
+            "Invalid \\escape":
+                "недопустимая escape-последовательность",
+            "Expecting property name":
+                "ожидается имя свойства",
+            "Expecting object or value":
+                "ожидается объект или значение",
+            "Expecting object or array":
+                "ожидается объект или массив",
+        }.get(e.msg, None)
+
+        if msg is not None:
+            return f"Строка {line}, позиция {col}: {msg}{context}"
+
+        return f"Строка {line}, позиция {col}: ошибка синтаксиса JSON{context}"
 
 
 class StaticFiles:
@@ -458,9 +511,24 @@ async def db_page(request):
     x=x.replace("{{DB_NAME}}",db)
     return HTMLResponse(x)
 
+
+def json_syntax_check(text="", text_b64=""):
+    """
+    проверяет текст Json на ошибку
+    {
+       "text": "текст Json",
+       "text_b64": "текст Json в base64 должен быть передан либо этот параметр, либо text"
+    }
+    """
+    if text_b64!="":
+        text = base64.b64decode(text_b64).decode("utf-8")
+    return check_json(text)
+
+
 def admin_routes(url_prefix:str="", use_db=True) -> list[Route]:
     global _PREFIX
     _PREFIX=url_prefix
+    register_rpc(json_syntax_check)
     ret = [
         Route(url_prefix+"/", endpoint=home_page),
         Route(url_prefix+"/codemirror/{path:path}", endpoint=StaticFiles("web/lib/codemirror.zip")),

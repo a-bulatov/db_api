@@ -274,6 +274,8 @@ window.onload = function() {
 
 function refreshClick(){
     refreshMeta()
+    let tabs = w2ui.layout.get('main').tabs
+    tabs.click(tabs.active)
 }
 
 function runClick(){

@@ -27,7 +27,7 @@ select meta.sheet_set('{"title":"refs",
 "columns":[
     {"name": "id", 	"type": "I"},
     {"name": "ref","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"},
-    {"name": "data_type","type": "E", "reference_guid":"data_type"}
+    {"name": "data_type","type": "E", "reference":"data_type"}
 ]}')
 
 
@@ -44,31 +44,16 @@ select meta.sheet_set('{"title":"multi refs",
     {"name": "ref","type": "M", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
 ]}')
 
-select data.sheet_set('{"title":"multi refs",
+select data.sheet_set('{
 "guid":"6ed9a6ea-af93-47ee-bf43-937304e2f663",
 "rows":[
 {"data":{"id":1,"ref":["3fa7d460-baf9-446b-bc66-f3a8a9db5470", "75e8989f-8d03-429e-9233-0e6117880715"]}}
 ]}')
 
-select r.guid,
-  (SELECT (
-  SELECT jsonb_object_agg(e.key, e.value)
-  FROM jsonb_array_elements(jsonb_agg(
-  case
-    when dt.eav_field='s' then json_build_object(atr.name, eav.s)
-    when dt.key ='B' then json_build_object(atr.name, eav.i=1)
-    when dt.eav_field='i' then json_build_object(atr.name, eav.i)
-    when dt.eav_field='f' then json_build_object(atr.name, eav.f)
-    when dt.eav_field='t' then json_build_object(atr.name, eav.t)
-    else json_build_object()
-  end
-  )) arr
-  CROSS JOIN LATERAL jsonb_each(arr) e)) data
-from meta.version v
-inner join meta.attribute atr on atr.entity_id = v.entity_id
-inner join meta.data_type dt on dt.id = atr.type_id
-inner join data.row r on r.entity_id = v.entity_id
-left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
-left join data.row rt on rt.entity_id = v.entity_id
-where v.id = 1
-group by r.guid
+select meta.sheet_set('{"title":"ext refs",
+"guid":"51d4f522-7741-4d18-8b6b-419e07f0368b",
+"columns":[
+    {"name": "id", 	"type": "I"},
+    {"name": "ref","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"},
+    {"name": "ref_id","type": "r", "reference":"ref", "reference_column":"id"}
+]}')
