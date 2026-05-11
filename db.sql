@@ -604,7 +604,7 @@ begin
             from data.row r
             where r.entity_id=v_row.ref_entity_id and r.guid = v_row.value::uuid;
             if tmp_value is Null then
-               return jsonb_build_object('error', format('Для поля %s не нацдена строка по ссылке %s', v_row.name, v_row.value));
+               return jsonb_build_object('error', format('Для поля %s не найдена строка по ссылке %s', v_row.name, v_row.value));
             end if;
             v_row.value = tmp_value;
         elseif v_row.type_code = 'M' then
@@ -694,39 +694,33 @@ returns table(row_id bigint, attr_id bigint, "value" jsonb)
 language plpgsql
 as $$
 declare
-    v_query text = '';
+    v_query text = 'select null::bigint row_id, null::bigint attr_id, null::jsonb "value" where 1<>1';
     v_attr record;
 begin
-    if not exists(select 1 from meta.attribute a
-        inner join meta.version v on a.entity_id = v.entity_id and v.id = f_version_id
-        inner join meta.data_type t on a.type_id = t.id and t.key ='r')
-    then
-        return query select null::bigint row_id, null::bigint attr_id, null::jsonb "value" where 1<>1;
-    end if;
+   /*
+   Из таблицы, заданной версией f_version_id берем все параметры типа r
+   и строим для них запрос на извлечение данных из связанной таблички
+   в конце выполняем получившийся запрос
+   */
+   for v_attr in
+      select r.id out_attr_id, r.ref_enum_key attr_name, e.guid, a.id sel_attr_id
+        from meta.version v
+        inner join meta.attribute r on r.entity_id = v.entity_id
+        inner join meta.data_type t on t.key = 'r' and t.id = r.type_id
+        inner join meta.attribute a on a.id = r.ref_attribute_id
+        inner join meta.attribute ea on ea.id = a.ref_attribute_id
+        inner join meta.entity e on e.id = ea.entity_id
+        where v.id = f_version_id
+   loop
+      v_query = format($q$%s union all
+        select ev.id row_id, %s attr_id, v.value->'data'->'%s' "value"
+        from jsonb_array_elements(data.sheet_get('{"guid":"%s","fields":["%s"]}')->'rows') v
+        inner join data.row w on w.guid = (v.value->>'guid')::uuid
+        inner join data.eav_%s ev on ev.r = w.id and ev.attribute_id = %s
+      $q$, v_query, v_attr.out_attr_id, v_attr.attr_name, v_attr.guid, v_attr.attr_name, f_version_id, v_attr.sel_attr_id);
+   end loop;
 
-    for v_attr in
-      select e.guid, a.ref_enum_key, a.id, a.ref_attribute_id, r.id r_id
-      from meta.version v
-      inner join meta.attribute r on r.entity_id = v.entity_id
-      inner join meta.data_type t on t.key = 'r' and t.id = r.type_id
-      inner join meta.attribute a on a.id = r.ref_attribute_id
-      inner join meta.entity e on e.id = a.entity_id
-      where v.id = f_version_id
-    loop
-      if v_query!='' then v_query = format('%s union all ', query); end if;
-      v_query = format($q$
-      select ev.id row_id, %s attr_id, v.value->'data'->'%s' "value"
-	  from jsonb_array_elements(data.sheet_get('{"guid":"%s","fields":["%s"]}')->'rows') v
-      inner join data.row w on w.guid = (v.value->>'guid')::uuid
-      inner join data.eav_%s ev on ev.r = w.id and ev.attribute_id = %s
-      $q$, v_attr.r_id, v_attr.ref_enum_key, v_attr.guid, v_attr.ref_enum_key, f_version_id, v_attr.ref_attribute_id);
-    end loop;
-
-    if v_query = '' then
-      return query select null::bigint row_id, null::bigint attr_id, null::jsonb "value" where 1<>1;
-    else
-      return query execute v_query;
-    end if;
+   return query execute v_query;
 end
 $$;
 
@@ -825,6 +819,7 @@ begin
                  and me.attribute_id = atr.ref_attribute_id
              where mr.guid = any(eav.s::uuid[])
          )) -- M
+         when dt.key ='r' then rv.value
          else to_jsonb(eav.s)
      end
      ) "data",

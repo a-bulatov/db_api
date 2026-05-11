@@ -54,6 +54,12 @@ select meta.sheet_set('{"title":"ext refs",
 "guid":"51d4f522-7741-4d18-8b6b-419e07f0368b",
 "columns":[
     {"name": "id", 	"type": "I"},
-    {"name": "ref","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"},
-    {"name": "ref_id","type": "r", "reference":"ref", "reference_column":"id"}
+    {"name": "ref_id","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"id"},
+    {"name": "ref_name","type": "r", "reference":"ref_id", "reference_column":"name"}
+]}')
+
+select data.sheet_set('{
+"guid":"51d4f522-7741-4d18-8b6b-419e07f0368b",
+"rows":[
+{"data":{"id":1,"ref_id":"75e8989f-8d03-429e-9233-0e6117880715"}}
 ]}')

@@ -63,7 +63,7 @@ function run(){
     }).then(response => response.json())
     .then(result => {
           let out = document.getElementById("finite-output");
-          out.innerHTML = `<pre>${JSON.stringify(result, null, 4)}</pre>`
+          out.innerHTML = `<pre>${JSON.stringify(result, null, 4).replaceAll("\\n", "\n").replaceAll('\"', '"')}</pre>`
     })
     .catch(error => console.error('Error:', error))
 };

@@ -99,7 +99,7 @@ def check_json(text: str) -> str | None:
 
         msg = {
             "Expecting property name enclosed in double quotes":
-                "ожидается имя свойства в двойных кавычках",
+                "ожидается имя свойства в двойных кавычках, либо лишняя запятая после значения",
             "Expecting value":
                 "ожидается значение",
             "Extra data":
