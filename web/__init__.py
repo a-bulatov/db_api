@@ -154,6 +154,7 @@ class DbAPI:
     обработка команд для работы с БД
     """
     _instance = None
+    _pg_catalog = None
 
     def __new__(cls, *args, **kwargs):
         if not DbAPI._instance:
@@ -173,7 +174,7 @@ class DbAPI:
         return x
 
     async def do_get_db_objects(self, env, **kwargs):
-        x = await env.sql("""select 'sh.'||(ns.oid::varchar) id, ns.nspname "text", 'fa fa-table-list' "icon",
+        nodes = await env.sql("""select 'sh.'||(ns.oid::varchar) id, ns.nspname "text", 'fa fa-table-list' "icon",
           (select array_to_json(
             ARRAY[json_build_object('id','functions.'||(ns.oid::varchar),'text','Функции', 'icon','fa fa-computer','nodes',(
                 select array_to_json(array_agg(row_to_json(fnc))) from (
@@ -215,7 +216,33 @@ class DbAPI:
         -- where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
         where ns.nspname not in ('pg_catalog', 'information_schema')
         order by ns.nspname""")
-        return x
+        tables = await self.pg_catalog(env)
+        for schema in nodes:
+            if not schema["nodes"]: continue
+            for table in schema["nodes"]:
+                if table["icon"] not in ("fa fa-table", "fa-table-columns", "fa fa-table-cells-column-lock"): continue
+                tables[f'{schema["text"]}.{table["text"]}'] = [x["text"] for x in table["nodes"]]
+        return {"sidebar": nodes, "tables": tables}
+
+    async def pg_catalog(self, env):
+        if DbAPI._pg_catalog is not None:
+            return DbAPI._pg_catalog
+        d = await env.sql("""select 'pg_catalog.'||c.relname tbl,
+         (select array_to_json(array_agg(sa.attname))
+          from (
+            select a.attname
+            from pg_catalog.pg_attribute a
+            where a.attnum > 0 and a.attrelid = c.oid
+            order by a.attnum
+          ) sa
+         ) flds
+        from pg_catalog.pg_namespace n
+        inner join pg_catalog.pg_class c on c.relnamespace = n.oid
+        where n.nspname = 'pg_catalog' and c.relkind in ('r','v','m')""")
+
+        DbAPI._pg_catalog = {x['tbl']:x['flds'] for x in d}
+
+        return DbAPI._pg_catalog
 
     async def do_get_info(self, env, id, **kwargs):
         id =list(id.split('.', 1))
@@ -419,7 +446,32 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         else:
             # Обычные таблицы
             ret += await self.create_table_scripts(env, id)
-        return ret
+        ret+=f"""\n/*
+drop table {t['t']} cascede; -- для удаленния таблицы со всеми зависимостями\n
+truncate table {t['t']} cascede; -- для очистки данных таблицы со всеми зависимостями\n"""
+
+        d = await env.sql("""select array_agg('    '||ns.nspname||'.'||cl1.relname)
+        from pg_catalog.pg_constraint co
+        inner join pg_catalog.pg_class cl1 on co.conrelid = cl1.oid
+        inner join pg_catalog.pg_namespace ns on ns.oid = cl1.relnamespace
+        inner join pg_catalog.pg_class cl2 on co.confrelid = cl2.oid
+        where co.contype = 'f' and cl2.oid = $1""", id, ONE)
+
+        if d:
+            ret += f"\nНа таблицу {t['t']}  ссылаются следующие другие таблицы:\n"+"\n".join(d)+"\n"
+
+        d = await env.sql("""select  array_agg(ns.nspname||'.'||dependent_view)
+        from pg_catalog.pg_depend d
+        inner join pg_catalog.pg_rewrite r on d.objid = r.oid
+        inner join pg_catalog.pg_class dependent_view on d.refobjid = dependent_view.oid
+        inner join pg_catalog.pg_namespace ns on ns.oid = dependent_view.relnamespace
+        inner join pg_catalog.pg_class source_table on r.ev_class = source_table.oid
+        where dependent_view.relkind in ('v', 'm') and d.refobjid = $1""", id, ONE)
+
+        if d:
+            ret += f"\nОт таблицы {t['t']} зависят следующие представления:\n"+"\n".join(d)+"\n"
+
+        return ret + "\n*/"
 
 
     async def view_info(self, env, id, materialized):
@@ -491,6 +543,10 @@ async def home_page(request):
     x = html("web/api.html")
     return HTMLResponse(x)
 
+async def test_page(request):
+    x = html("web/test_hint.html")
+    return HTMLResponse(x)
+
 async def db_page(request):
     if request.method=="POST": # запрос на выполнение команды в базе данных
         x = await request.json()
@@ -531,6 +587,7 @@ def admin_routes(url_prefix:str="", use_db=True) -> list[Route]:
     register_rpc(json_syntax_check)
     ret = [
         Route(url_prefix+"/", endpoint=home_page),
+        #Route(url_prefix+"/test", endpoint=test_page),
         Route(url_prefix+"/codemirror/{path:path}", endpoint=StaticFiles("web/lib/codemirror.zip")),
         Route(url_prefix+"/web_ui/{path:path}", endpoint=StaticFiles("web/lib/web2ui.zip")),
         Route(url_prefix+"/js/{path:path}",  endpoint=StaticFiles("web/js")),

@@ -1,4 +1,18 @@
-const pstyle = 'border: 1px solid #efefef; padding: 5px';
+const pstyle = 'border: 1px solid #efefef; padding: 5px'
+const editor_conf = {
+       //theme: 'idea',
+       mode: 'text/x-pgsql',
+       lineNumbers: true,
+       indentWithTabs: true,
+       smartIndent: true,
+       lineWrapping: true,
+       autofocus: true,
+       indentUnit: 2,
+       tabSize: 4,
+       extraKeys: { "Ctrl-Space": "autocomplete", "Shift-Tab": "indentLess" },
+       hintOptions: { tables: [], completeSingle: false }
+    }
+
 
 new w2layout({
      box: '#layout',
@@ -22,7 +36,6 @@ new w2layout({
                       info.style.display = 'none'
                       cons.style.display = 'none'
                       data.style.display = 'none'
-                      run_btn.disabled = event.target == "data"
                       w2ui.layout.hide('preview')
                       switch(event.target){
                         case("info"):
@@ -37,6 +50,7 @@ new w2layout({
                            refreshData()
                            break
                       }
+                      run_btn.disabled = event.target == "data"
                  }
             },
             html: `
@@ -158,7 +172,7 @@ new w2grid({
 
 new w2sidebar({
     topHTML: `<div style="background-color: #eee; padding: 10px 5px; border-bottom: 1px solid silver">
-    <button class="w2ui-btn action" onclick="refreshClick()">
+    <button class="w2ui-btn action" onclick="refreshMeta()">
      <i class="fas fa-refresh"></i>
     </button>
     <button class="w2ui-btn action"  onclick="runClick()" id="btnRun">
@@ -201,30 +215,6 @@ function refreshData(id=0){
 }
 
 
-function refreshMeta(){
-    fetch('/db', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({"method": "db", "params":{"do": "get_db_objects"}})
-    }).then(response => response.json())
-    .then(result => {
-          let sel = null
-          let sidebar= w2ui.sidebar
-          if (sidebar.nodes.length > 0) sel=sidebar.selected[0]
-          let nodeIds = sidebar.nodes.map(n => n.id)
-          sidebar.remove.apply(sidebar, nodeIds)
-          result.result.forEach((item)=>{
-            sidebar.add(item)
-          })
-          if (sel === null) sel = result.result[0]["id"]
-          sidebar.refresh()
-          sidebar.click(sel)
-    })
-    .catch(error => console.error('Error:', error))
-}
-
 function getNodeInfo(id){
     w2ui.layout.get('main').tabs.disable('data')
     fetch('/db', {
@@ -245,37 +235,48 @@ function getNodeInfo(id){
     .catch(error => console.error('Error:', error))
 }
 
-window.onload = function() {
-   window.info_editor = CodeMirror(document.getElementById('infoEditor'), {
-     lineNumbers: true,
-     tabSize: 4,
-     value: '',
-     mode: 'sql',
-     theme: 'idea',
-     matchBrackets:true,
-     extraKeys: {
-       "Shift-Tab": "indentLess"
-     }
-   })
-   window.console_editor = CodeMirror(document.getElementById('consoleEditor'), {
-     lineNumbers: true,
-     tabSize: 4,
-     value: '',
-     mode: 'sql',
-     theme: 'idea',
-     matchBrackets:true,
-     extraKeys: {
-      "Shift-Tab": "indentLess"
-     }
-   })
+function AutocompleteTrigger(cm, change) {
+    if (change && change.text && change.text[0] && (change.text[0] === ' ' || change.text[0] === '.')) {
+        setTimeout(function() {
+            cm.showHint();
+        }, 10);
+    }
+}
 
+window.onload = function() {
+   window.info_editor = CodeMirror(document.getElementById('infoEditor'), Object.assign({},editor_conf))
+   window.console_editor = CodeMirror(document.getElementById('consoleEditor'), Object.assign({},editor_conf))
+   window.info_editor.on("inputRead", AutocompleteTrigger)
+   window.console_editor.on("inputRead", AutocompleteTrigger)
    refreshMeta()
 }
 
-function refreshClick(){
-    refreshMeta()
-    let tabs = w2ui.layout.get('main').tabs
-    tabs.click(tabs.active)
+function refreshMeta(){
+    fetch('/db', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({"method": "db", "params":{"do": "get_db_objects"}})
+    }).then(response => response.json())
+    .then(result => {
+          let sel = null
+          let sidebar= w2ui.sidebar
+          if (sidebar.nodes.length > 0 && sidebar.selected !== null) sel=sidebar.selected[0]
+          let nodeIds = sidebar.nodes.map(n => n.id)
+          sidebar.remove.apply(sidebar, nodeIds)
+          result.result.sidebar.forEach((item)=>{
+            sidebar.add(item)
+          })
+          if (sel === null) sel = result.result.sidebar[0]["id"]
+          sidebar.refresh()
+          sidebar.click(sel)
+          let tabs = w2ui.layout.get('main').tabs
+          tabs.click(tabs.active)
+          window.console_editor.setOption("hintOptions",{"tables":result.result.tables})
+          window.info_editor.setOption("hintOptions",{"tables":result.result.tables})
+    })
+    .catch(error => console.error('Error:', error))
 }
 
 function runClick(){

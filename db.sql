@@ -836,7 +836,7 @@ begin
     inner join data.row r on r.entity_id = v.entity_id
     inner join data.filter(v.id, f_params) fltr on fltr.id = r.id
     left join  data.eav eav on eav.attribute_id = atr.id and eav.id = r.id and eav.version_id = v.id
-    left join  data.ref_vals(v.id) rv on rv.row_id = r.id and rv.attr_id = atr.id
+    left join  data.ref_vals(v.id) rv on dt.key ='r' and rv.row_id = r.id and rv.attr_id = atr.id
     left join  refs on refs.id = atr.id
     left join  data.eav reav on dt.key in ('R','M') and reav.version_id = refs.version_id and reav.attribute_id=atr.ref_attribute_id and reav.id = eav.r
     left join  data.row geav on geav.id = reav.id
