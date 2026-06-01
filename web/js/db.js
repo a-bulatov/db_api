@@ -1,4 +1,5 @@
 const pstyle = 'border: 1px solid #efefef; padding: 5px'
+document.addEventListener('mousemove', function(e) { window._lastMouse = e })
 const editor_conf = {
        //theme: 'idea',
        mode: 'text/x-pgsql',
@@ -187,6 +188,30 @@ new w2sidebar({
          getNodeInfo(event.target)
          if(main.tabs.active == "data") refreshData(event.target)
     },
+    onMouseEnter: function(event) {
+        var node = this.get(event.target);
+        if (!node || !node.tooltip) return;
+        var e = event.originalEvent;
+        if (!e && window._lastMouse) e = window._lastMouse;
+        if (!e) return;
+        var tip = document.getElementById('sb_tip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'sb_tip';
+            tip.style.cssText = 'position:fixed;z-index:99999;background:#fff;color:#000;' +
+                'padding:4px 8px;border-radius:3px;font-size:12px;pointer-events:none;display:none;' +
+                'border:1px solid #ccc;box-shadow:1px 2px 4px rgba(0,0,0,.1)';
+            document.body.appendChild(tip);
+        }
+        tip.textContent = node.tooltip;
+        tip.style.display = '';
+        tip.style.left = (e.clientX + 12) + 'px';
+        tip.style.top = (e.clientY + 10) + 'px';
+    },
+    onMouseLeave: function() {
+        var tip = document.getElementById('sb_tip');
+        if (tip) tip.style.display = 'none';
+    }
 })
 
 w2ui.layout.html('left', w2ui.sidebar)
