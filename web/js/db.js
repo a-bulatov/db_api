@@ -9,7 +9,7 @@ const editor_conf = {
        autofocus: true,
        indentUnit: 2,
        tabSize: 4,
-       extraKeys: { "Ctrl-Space": "autocomplete", "Shift-Tab": "indentLess" },
+        extraKeys: { "Ctrl-Space": function(cm){cm.showHint();}, "Shift-Tab": "indentLess" },
        hintOptions: { tables: [], completeSingle: false }
     }
 
@@ -245,7 +245,7 @@ function AutocompleteTrigger(cm, change) {
 
 window.onload = function() {
    window.info_editor = CodeMirror(document.getElementById('infoEditor'), Object.assign({},editor_conf))
-   window.console_editor = CodeMirror(document.getElementById('consoleEditor'), Object.assign({},editor_conf))
+   window.console_editor = CodeMirror(document.getElementById('consoleEditor'), Object.assign({},editor_conf,{autofocus:false}))
    window.info_editor.on("inputRead", AutocompleteTrigger)
    window.console_editor.on("inputRead", AutocompleteTrigger)
    refreshMeta()

@@ -175,8 +175,11 @@ class DbAPI:
 
     async def do_get_db_objects(self, env, **kwargs):
         nodes = await env.sql("""select 'sh.'||(ns.oid::varchar) id, ns.nspname "text", 'fa fa-table-list' "icon",
+          (select count(*) from pg_catalog.pg_class c where c.relkind in ('r','v','m') and c.relnamespace=ns.oid) "count",
           (select array_to_json(
-            ARRAY[json_build_object('id','functions.'||(ns.oid::varchar),'text','Функции', 'icon','fa fa-computer','nodes',(
+            ARRAY[json_build_object('id','functions.'||(ns.oid::varchar),'text','Функции', 'icon','fa fa-computer',
+                'count',(select count(*) from pg_catalog.pg_proc p where p.pronamespace = ns.oid),
+                'nodes',(
                 select array_to_json(array_agg(row_to_json(fnc))) from (
                     select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-minus' "icon"
                     from pg_catalog.pg_proc p
@@ -198,6 +201,8 @@ class DbAPI:
                 when c.relkind='v' then 'fa fa-table-columns'
                 when c.relkind='m' then 'fa fa-table-cells-column-lock'
               end "icon",
+              obj_description(c.oid) tooltip,
+              (select count(*) from pg_catalog.pg_attribute a where a.attnum > 0 and a.attrelid = c.oid) "count",
               (select array_to_json(array_agg(row_to_json(fld))) from (
                  select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-minus' "icon"
                  from pg_catalog.pg_attribute a

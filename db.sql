@@ -82,9 +82,9 @@ select x.column1, x.column2, meta.enum_id('entity_type')
 from (values
   ('EAV', 'Логическая таблица'),
   ('SYS', 'Системная таблица'), -- на системные таблицы нельзя ссылаться
+  ('RVT', 'Таблица с вепрсионированием каждой строки'),
   ('PGT', 'Таблица postgresql')
 ) x;
-
 
 create table meta.entity (
 	id bigserial not null primary key,
@@ -100,6 +100,19 @@ comment on column meta.entity.guid is 'глобальный идентифика
 comment on column meta.entity.title is 'наименование таблицы для отображения';
 comment on column meta.entity.f_read is 'метод чтения. если задан то нельзя менять структуру таблицы';
 comment on column meta.entity.f_write is 'метод записи. Если пусто, но задан метод чтения, значит можно только читать данные';
+
+create table meta.class (
+    id bigserial not null primary key,
+    parent_id bigint references meta.class,
+    guid uuid unique default uuid_generate_v4() not null,
+    title varchar(250) unique not null,
+    store_entity bigint not null references meta.entity(id)
+);
+comment on table meta.class is 'классы (онтологии)';
+comment on column meta.class.parent_id is 'ссылка на родительский класс ';
+comment on column meta.class.guid is 'глобальный идентификатор класса';
+comment on column meta.class.title is 'наименование класса для отображения';
+comment on column meta.class.store_entity is 'таблица, в которой лежат данные класса (одна на всю иерархию)';
 
 create table meta."version" (
 	id bigserial not null primary key,
@@ -439,9 +452,9 @@ create table "data"."row" (
 );
 
 create table "data".eav (
-	id bigint not null,
-	version_id bigint not null,
-	attribute_id bigint not null,
+	id bigint not null references data.row(id) on delete cascade,
+	version_id bigint not null references meta.version(id),
+	attribute_id bigint not null references meta.attribute(id) on delete cascade,
 	s text null,
 	i bigint null,
 	f double precision null,
@@ -449,8 +462,9 @@ create table "data".eav (
 	r bigint references data.row(id) on delete cascade,
 	constraint eav_pk primary key (id, version_id, attribute_id)
 );
+comment on table data.eav is 'базовая таблица EAV';
 
--- триггеры для партиций
+-- триггеры для партиций eav
 create function data.eav_insert()
  returns trigger
  language plpgsql
@@ -472,7 +486,7 @@ create function data.eav_update()
 as $$
 begin
     execute format(
-      $q$update data.eav_%I set s=%L, i=%L, f=%L, r=%L, t='%s' where id=%L and attribute_id=%L$q$,
+      $q$update data.eav_%I set s=%L, i=%L::bigint, f=%L::double precision, r=%L::bigint, t=%L::timestamp where id=%I and attribute_id=%I$q$,
       new.version_id,
       new.s, new.i, new.f, new.r, new.t,
       new.id, new.attribute_id
@@ -492,6 +506,58 @@ update on data.eav for each row execute
 !!10..!!  function data.eav_update();
 
 
+create table data.rvt(
+  id bigint not null references data.row(id),
+  entinty_id bigint not null references meta.entity(id),
+  version_id bigint not null references meta.version(id) on delete cascade,
+  row_data jsonb,
+  constraint rvt_pk primary key (id, entinty_id, version_id)
+);
+comment on table data.rvt is 'базовая таблица с версионированием каждой строки';
+
+-- триггеры для партиций rvt
+create function data.rvt_insert()
+ returns trigger
+ language plpgsql
+ security definer
+as $$
+begin
+    execute format(
+      'insert into data.rvt_%s values ($1.*)',
+      new.entity_id
+    ) using new;
+    return null;
+end
+$$;
+
+create function data.rvt_update()
+ returns trigger
+ language plpgsql
+ security definer
+as $$
+begin
+    execute format(
+      $q$update data.rvt_%I set row_data=%L where id=%I and version_id=%I$q$,
+      new.entity_id,
+      new.row_data,
+      new.id,
+      new.verion_id
+    );
+    return null;
+end
+$$;
+
+create trigger rvt_insert_trigger before
+insert on data.rvt for each row execute
+!!..9.6!! procedure data.rvt_insert();
+!!10..!!  function data.rvt_insert();
+
+create trigger rvt_update_trigger before
+update on data.rvt for each row execute
+!!..9.6!! procedure data.rvt_update();
+!!10..!!  function data.rvt_update();
+
+---------------------------------------------------------------------------
 
 create function data.sheet_set(f_params jsonb)
   returns jsonb
