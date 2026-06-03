@@ -9,7 +9,8 @@ const editor_conf = {
        lineWrapping: true,
        autofocus: true,
        indentUnit: 2,
-       tabSize: 4,
+        tabSize: 4,
+        dragDrop: false,
         extraKeys: { "Ctrl-Space": function(cm){cm.showHint();}, "Shift-Tab": "indentLess" },
        hintOptions: { tables: [], completeSingle: false }
     }
@@ -84,7 +85,8 @@ new w2toolbar({
         { type: 'radio', id: 'data', group: '1', text: 'Данные', icon: 'fa fa-table' },
         { type: 'break' },
         { type: 'spacer' },
-        { type: 'button', id: 'item6', text: 'Выгрузить', icon: 'w2ui-icon-paste' }
+        { type: 'button', id: 'save', text: 'Выгрузить', icon: 'w2ui-icon-paste' },
+        { type: 'button', id: 'close', text: 'Закрыть', icon: 'fa fa-times' }
     ],
     onClick(event) {
         let notify = document.getElementById('previewNotify')
@@ -99,6 +101,9 @@ new w2toolbar({
                 table.style.display = 'block'
                 let pv = w2ui.layout.get('preview')
                 table.style.height=(pv.height - 50).toString() + "px"
+                break
+            case ('close') :
+                w2ui.layout.hide('preview')
                 break
         }
     }
@@ -216,6 +221,26 @@ new w2sidebar({
 
 w2ui.layout.html('left', w2ui.sidebar)
 
+// drag из sidebar
+document.addEventListener('mousedown', function(e) {
+    var nodeEl = e.target.closest('.w2ui-node')
+    if (nodeEl) {
+        var id = nodeEl.id.replace('node_', '')
+        var node = w2ui.sidebar.get(id)
+        if (node && node.icon !== 'fa fa-computer') nodeEl.draggable = true
+    }
+})
+document.addEventListener('dragstart', function(e) {
+    var nodeEl = e.target.closest('.w2ui-node')
+    if (!nodeEl) return
+    var id = nodeEl.id.replace('node_', '')
+    var node = w2ui.sidebar.get(id)
+    if (node && node.text && node.icon !== 'fa fa-computer') {
+        e.dataTransfer.setData('text/plain', node.text)
+        e.dataTransfer.effectAllowed = 'copy'
+    }
+})
+
 function refreshData(id=0){
      if (id==0) id = w2ui.sidebar.selected
      fetch('/db', {
@@ -273,6 +298,25 @@ window.onload = function() {
    window.console_editor = CodeMirror(document.getElementById('consoleEditor'), Object.assign({},editor_conf,{autofocus:false}))
    window.info_editor.on("inputRead", AutocompleteTrigger)
    window.console_editor.on("inputRead", AutocompleteTrigger)
+
+   // drag-drop из sidebar в редакторы codemirror
+   function setupDragDrop(cm) {
+       var wr = cm.getWrapperElement()
+       wr.addEventListener('dragover', function(e) { e.preventDefault() })
+       wr.addEventListener('drop', function(e) {
+           e.preventDefault()
+           var text = e.dataTransfer.getData('text/plain')
+           if (text) {
+               var pos = cm.coordsChar({left:e.clientX, top:e.clientY}, 'window')
+               cm.replaceRange(text, pos)
+               cm.focus()
+               cm.setCursor({line:pos.line, ch:pos.ch + text.length})
+           }
+       })
+   }
+   setupDragDrop(window.info_editor)
+   setupDragDrop(window.console_editor)
+
    refreshMeta()
 }
 

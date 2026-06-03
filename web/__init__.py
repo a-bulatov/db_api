@@ -226,7 +226,7 @@ class DbAPI:
             if not schema["nodes"]: continue
             for table in schema["nodes"]:
                 if table["icon"] not in ("fa fa-table", "fa-table-columns", "fa fa-table-cells-column-lock"): continue
-                tables[f'{schema["text"]}.{table["text"]}'] = [x["text"] for x in table["nodes"]]
+                tables[f'{schema["text"]}.{table["text"].rsplit("(",1)[0].strip()}'] = [x["text"] for x in table["nodes"]]
         return {"sidebar": nodes, "tables": tables}
 
     async def pg_catalog(self, env):
