@@ -181,9 +181,12 @@ class DbAPI:
                 'count',(select count(*) from pg_catalog.pg_proc p where p.pronamespace = ns.oid),
                 'nodes',(
                 select array_to_json(array_agg(row_to_json(fnc))) from (
-                    select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-minus' "icon"
+                    select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-minus' "icon",
+                        (string_to_array(d.description,chr(10)))[1] tooltip
                     from pg_catalog.pg_proc p
+                    left join pg_catalog.pg_description d on p.oid=d.objoid
                     where p.pronamespace = ns.oid
+                    order by 2
                 ) fnc
             ))]||  
             (select array_agg(row_to_json(x)) from(
@@ -201,10 +204,11 @@ class DbAPI:
                 when c.relkind='v' then 'fa fa-table-columns'
                 when c.relkind='m' then 'fa fa-table-cells-column-lock'
               end "icon",
-              obj_description(c.oid) tooltip,
+              (string_to_array(obj_description(c.oid),chr(10)))[1] tooltip,
               (select count(*) from pg_catalog.pg_attribute a where a.attnum > 0 and a.attrelid = c.oid) "count",
               (select array_to_json(array_agg(row_to_json(fld))) from (
-                 select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-minus' "icon"
+                 select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-minus' "icon",
+                    (string_to_array(col_description(c.oid, a.attnum),chr(10)))[1] tooltip
                  from pg_catalog.pg_attribute a
                  where a.attnum > 0 and a.attrelid = c.oid
                  order by a.attnum
@@ -549,7 +553,7 @@ async def home_page(request):
     return HTMLResponse(x)
 
 async def test_page(request):
-    x = html("web/test_hint.html")
+    x = html("web/merm.html")
     return HTMLResponse(x)
 
 async def db_page(request):
@@ -592,8 +596,9 @@ def admin_routes(url_prefix:str="", use_db=True) -> list[Route]:
     register_rpc(json_syntax_check)
     ret = [
         Route(url_prefix+"/", endpoint=home_page),
-        #Route(url_prefix+"/test", endpoint=test_page),
+        Route(url_prefix+"/test", endpoint=test_page),
         Route(url_prefix+"/codemirror/{path:path}", endpoint=StaticFiles("web/lib/codemirror.zip")),
+        Route(url_prefix+"/mermaid/{path:path}", endpoint=StaticFiles("web/lib/mermaid.zip")),
         Route(url_prefix+"/web_ui/{path:path}", endpoint=StaticFiles("web/lib/web2ui.zip")),
         Route(url_prefix+"/js/{path:path}",  endpoint=StaticFiles("web/js")),
     ]

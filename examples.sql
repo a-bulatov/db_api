@@ -63,3 +63,19 @@ select data.sheet_set('{
 "rows":[
 {"data":{"id":1,"ref_id":"75e8989f-8d03-429e-9233-0e6117880715"}}
 ]}')
+
+
+select meta.sheet_set('{"title":"Сопроводительная документация",
+"guid":"00000000-0000-0000-0000-000000000005",
+"entity_type":"RVT",
+"columns":[
+    {"name": "title_short", 	"type": "S", "title":"Краткое наименование"},
+    {"name": "title", 	"type": "S", "title":"Наименование"}
+]}')
+
+select data.sheet_set('{
+"guid":"00000000-0000-0000-0000-000000000005",
+"rows":[
+{"data":{"title_short":"Краткое","title":"Полное"}},
+{"data":{"title_short":"док2","title":"Второй документ"}}
+]}')
