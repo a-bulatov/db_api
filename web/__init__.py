@@ -6,10 +6,9 @@ import base64
 import json
 from ab_engine.env import DB_ENV
 from ab_engine.db.option import *
-from ab_engine import register_rpc
+from ab_engine import register_rpc, Config
 from inspect import iscoroutinefunction
 from datetime import datetime
-
 
 def get_sql(script:list, version=None):
     line, query, status, buf = "", [], "", ""
@@ -167,10 +166,13 @@ class DbAPI:
         f = getattr(self,"do_"+do, None)
         if f is None:
             raise NotImplementedError(f"Не реализовано {do}")
-        if iscoroutinefunction(f):
-            x =await f(env,**kwargs)
-        else:
-            x = f(env,**kwargs)
+        try:
+            if iscoroutinefunction(f):
+                x =await f(env,**kwargs)
+            else:
+                x = f(env,**kwargs)
+        except Exception as e:
+            Config().log(e)
         return x
 
     async def do_get_db_objects(self, env, **kwargs):
@@ -181,7 +183,7 @@ class DbAPI:
                 'count',(select count(*) from pg_catalog.pg_proc p where p.pronamespace = ns.oid),
                 'nodes',(
                 select array_to_json(array_agg(row_to_json(fnc))) from (
-                    select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-minus' "icon",
+                    select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-caret-right' "icon",
                         (string_to_array(d.description,chr(10)))[1] tooltip
                     from pg_catalog.pg_proc p
                     left join pg_catalog.pg_description d on p.oid=d.objoid
@@ -207,7 +209,7 @@ class DbAPI:
               (string_to_array(obj_description(c.oid),chr(10)))[1] tooltip,
               (select count(*) from pg_catalog.pg_attribute a where a.attnum > 0 and a.attrelid = c.oid) "count",
               (select array_to_json(array_agg(row_to_json(fld))) from (
-                 select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-minus' "icon",
+                 select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-caret-right' "icon",
                     (string_to_array(col_description(c.oid, a.attnum),chr(10)))[1] tooltip
                  from pg_catalog.pg_attribute a
                  where a.attnum > 0 and a.attrelid = c.oid
@@ -255,7 +257,8 @@ class DbAPI:
 
     async def do_get_info(self, env, id, **kwargs):
         id =list(id.split('.', 1))
-        id[1] = int(id[1])
+        if '.' not in id[1]:
+            id[1] = int(id[1])
         match(id[0]):
             case "sh": return await self.schema_info(env, id[1])
             case "functions": return await self.functions_info(env, id[1])
@@ -489,7 +492,44 @@ truncate table {t['t']} cascede; -- для очистки данных табл�
         return f"-- представление { id }"
 
     async def attribute_info(self, env, id):
-        return f"-- aтрибут { id }"
+        id, attr = id.split('.')
+        attr = await env.sql("""SELECT 
+            a.attnum AS position,
+            quote_ident(a.attname) AS attribute_name,
+            format_type(a.atttypid, a.atttypmod) AS data_type,
+            a.attlen AS type_length,
+            a.attnotnull AS is_not_null,
+            a.atthasdef AS has_default_value,
+            col_description(c.oid, a.attnum) AS attribute_comment,
+            quote_ident(n.nspname)||'.'||quote_ident(c.relname) table_name,
+            pg_get_expr(d.adbin, d.adrelid) AS column_default
+        FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
+        JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN  pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+        WHERE c.oid = $1 AND a.attnum = $2 """, id, attr, ROW, OBJECT)
+        info = f"""/*
+Атрибут {attr.attribute_name} таблицы {attr.table_name}
+Тип атрибута: {attr.data_type}
+"""
+        if attr.type_length>0:
+            info +=f"Длина типа атрибута: {attr.type_length}\n"
+        if attr.is_not_null:
+            info+="Не может быть NULL\n"
+        if attr.has_default_value:
+            info += f"По умолчанию: {attr.column_default}\n"
+        info = f"""{info}*/
+        
+alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"""
+        if attr.is_not_null:
+            info+=" not null"
+        if attr.has_default_value:
+            info+=f" default {attr.column_default}"
+        info +=";\n"
+
+        if attr.attribute_comment:
+            info += f"\ncomment on column {attr.table_name}.{attr.attribute_name} is '{attr.attribute_comment}';\n"
+        return info
 
     async def do_sql(self, env, sql_b64="", sql="", **kwargs):
         env.rollback()
@@ -514,7 +554,7 @@ truncate table {t['t']} cascede; -- для очистки данных табл�
             for n, x in enumerate(ret):
                 for a in x:
                     if isinstance(x[a],(dict,list)):
-                        x[a] = json.dumps(x[a])
+                        x[a] = json.dumps(x[a], ensure_ascii=False)
                 x = json.dumps(x, ensure_ascii=False, default=str)
                 x = json.loads(x)
                 x["recid"] = n
@@ -527,6 +567,7 @@ truncate table {t['t']} cascede; -- для очистки данных табл�
         else:
             ret = {"notice": notify}
         ret["notice"] = "\n".join(ret["notice"])
+
         return ret
 
     async def do_get_data(self, env, id, **kwargs):

@@ -70,12 +70,13 @@ select meta.sheet_set('{"title":"Сопроводительная докумен
 "entity_type":"RVT",
 "columns":[
     {"name": "title_short", 	"type": "S", "title":"Краткое наименование"},
-    {"name": "title", 	"type": "S", "title":"Наименование"}
+    {"name": "title", 	"type": "S", "title":"Наименование"},
+    {"name": "ref_id","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
 ]}')
 
 select data.sheet_set('{
 "guid":"00000000-0000-0000-0000-000000000005",
 "rows":[
-{"data":{"title_short":"Краткое","title":"Полное"}},
-{"data":{"title_short":"док2","title":"Второй документ"}}
+{"guid":"41aa5e88-09a4-4a93-a159-4e4faf48f3db","data":{"title_short":"Краткое","title":"Полное"}},
+{"guid":"21beb85f-120c-48b0-a5e9-a52580757b54","data":{"title_short":"док2","title":"Второй документ","ref_id":"75e8989f-8d03-429e-9233-0e6117880715"}}
 ]}')
