@@ -56,7 +56,12 @@ new w2layout({
                  }
             },
             html: `
-                <div id="infoEditor" class="full"></div>
+                <div id="infoEditor" class="full">
+                    <div id="funcExts" class="custom-rt" hidden>
+                    {{FN_SAVE}}
+                    <button id="fn-debug" class="w2ui-btn action" onclick="run()" title="Отладка"><i class="fas fa-bug"></i></button>
+                    </div>
+                </div>
                 <div id="consoleEditor" class="full" hidden></div>
                 <div id="dataGrid" class="full" hidden></div>`
          },
@@ -276,7 +281,13 @@ function getNodeInfo(id){
     }).then(response => response.json())
     .then(result => {
         let tabs = w2ui.layout.get('main').tabs
+        let fexts = document.getElementById('funcExts')
         window.info_editor.setValue(result.result)
+        if(id.startsWith("fn.")) {
+            fexts.style.display = 'block'
+        } else {
+            fexts.style.display='none'
+        }
         if("tv".includes(id[0])) {
             w2ui.layout.get('main').tabs.enable('data')
         } else
@@ -394,13 +405,28 @@ function runClick(){
 
 async function copyToClipboard(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(text)
   } else {
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    document.body.appendChild(textArea);
-    textArea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textArea);
+    const textArea = document.createElement("textarea")
+    textArea.value = text
+    document.body.appendChild(textArea)
+    textArea.select()
+    document.execCommand("copy")
+    document.body.removeChild(textArea)
   }
+}
+
+async function saveFnunction() {
+    let sql_text = window.info_editor.getValue()
+    fetch('/db', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({"method": "db", "params":{"do": "save_fn", "sql_b64": btoa(unescape(encodeURIComponent(sql_text)))}})
+    }).then(response => response.json())
+    .then(result => {
+        w2utils.notify('Ok', {timeout: 2000, success: true, top: 20, right: 20})
+    })
+    .catch(error => console.error('Error:', error))
 }

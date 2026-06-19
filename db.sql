@@ -632,10 +632,10 @@ comment on table data.eav is 'базовая таблица EAV';
 
 -- триггеры для партиций eav
 create function data.eav_insert()
- returns trigger
- language plpgsql
- security definer
-as $$
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $data_eav_insert__2026_06_19$
 begin
     execute format(
       'insert into data.eav_%s values ($1.*)',
@@ -643,13 +643,13 @@ begin
     ) using new;
     return null;
 end
-$$;
+$data_eav_insert__2026_06_19$;
 
 create function data.eav_update()
- returns trigger
- language plpgsql
- security definer
-as $$
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $data_eav_update__2026_06_19$
 begin
     execute format(
       $q$update data.eav_%I set s=%L, i=%L::bigint, f=%L::double precision, r=%L::bigint, t=%L::timestamp where id=%I and attribute_id=%I$q$,
@@ -659,7 +659,7 @@ begin
     );
     return null;
 end
-$$;
+$data_eav_update__2026_06_19$;
 
 create trigger eav_insert_trigger before
 insert on data.eav for each row execute
@@ -1354,6 +1354,53 @@ end
 $$;
 
 
+create function data.filter_rvt(f_version_id bigint, f_params jsonb)
+ RETURNS TABLE(id bigint, npp integer)
+ LANGUAGE plpgsql
+AS $data_filter_rvt__2026_06_19$
+declare
+   v_query text = '';
+   v_limits text;
+   v_version record;
+begin
+   select v.id, v.entity_id
+   into v_version
+   from meta.version v
+   where v.id = f_version_id;
+
+   v_limits = case
+      when (f_params->>'limit') is null
+      then ''
+      else ' limit '||((f_params->>'limit')::int)::varchar
+   end || case
+      when (f_params->>'offset') is null
+      then ''
+      else ' offset '||((f_params->>'offset')::int)::varchar
+   end;
+
+   if (f_params->>'filter') is null and (f_params->>'order') is null then
+        v_query = format($q$
+			select x.id, row_number() over (order by x.id)::integer npp
+             from (
+			   select t.id
+			   from data.rvt_%s t
+			   where t.version_id <= %s
+			   group by id
+			   order by t.id
+             %s) x
+		$q$, v_version.entity_id, v_version.id, v_limits);
+   elseif (f_params->>'filter') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+        v_query = format($q$
+			select x.id, 1::integer npp
+			from data.row x where x.guid=%L::uuid
+		$q$, f_params->>'filter');
+   end if;
+
+   return query execute v_query;
+end
+$data_filter_rvt__2026_06_19$;
+
+
 create function data.ref_vals(f_version_id bigint)
 returns table(row_id bigint, attr_id bigint, "value" jsonb)
 language plpgsql
@@ -1391,9 +1438,9 @@ $$;
 
 
 create function data.sheet_get(f_params jsonb)
-returns jsonb
-language plpgsql
-as $$
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $data_sheet_get__2026_06_19$
 declare
    v_sheet record;
    v_ret jsonb;
@@ -1421,14 +1468,11 @@ begin
 
 
    if v_sheet.id is Null then
-        -- таблица не найдена
         return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
    elseif v_sheet.f_read is not Null then
-   		-- для таблицы задана функция чтения
         t_tmp = format($q$select %s('%s')$q$, v_sheet.f_read,f_params);
         execute t_tmp into v_ret;
    elseif v_sheet.entity_type='EAV' then
-   	   	-- это EAV таблица
 	   	if (f_params->>'fields') is not null then
 		  select array_agg(elem::varchar)
 		  into v_fields
@@ -1515,27 +1559,28 @@ begin
 		  order by fltr.npp
 		 ) x;
    elseif v_sheet.entity_type='RVT' then
-   		-- это таблица с отдельным версионированием строк
-		select jsonb_agg(jsonb_strip_nulls(
-		  	jsonb_build_object('guid', r.guid, 'class', cla.guid, 'version', v.guid, 'data', rvt.row_data, 'references', rvt.refs)
-		))
+		select jsonb_agg(x.val)
 		into v_ret
+		from (select jsonb_strip_nulls(
+		  	    jsonb_build_object(
+                    'guid', r.guid,
+                    'class', cla.guid,
+                    'version_guid', v.guid,
+                    'data', rvt.row_data,
+                    'references', case when rvt.refs = '{}'::jsonb then null else rvt.refs end
+		  	    )
+		    ) val
 		from data.row r
 		inner join data.rvt rvt on rvt.entity_id = v_sheet.id and rvt.id = r.id
-		inner join (
-		  select max(rv.version_id) version_id, rv.id
-		  from data.rvt rv
-		  where rv.entity_id = v_sheet.id and (v_sheet.version_id is null or rv.version_id <= v_sheet.version_id)
-		  group by rv.id
-		) ver on rvt.version_id = ver.version_id and ver.id = r.id
-		inner join meta.version v on v.id = ver.version_id
-		left join  meta.class cla on cla.id = r.class_id
-		where r.entity_id = v_sheet.id;
+		inner join meta.version v on v.id = v_sheet.version_id
+        inner join data.filter_rvt(v.id, f_params) fltr on fltr.id = r.id
+        left join  meta.class cla on cla.id = r.class_id
+        where r.entity_id = v_sheet.id and ((not f_params ? 'version_guid') or rvt.version_id = v_sheet.version_id)
+        order by fltr.npp) x;
    else
    		return jsonb_build_object('error','Неподдерживаемый тип таблицы');
    end if;
 
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
-$$;
-
+$data_sheet_get__2026_06_19$;
