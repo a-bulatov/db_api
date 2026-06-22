@@ -69,7 +69,7 @@ new w2layout({
             <div id="previewError" style="full" hidden></div>
             <div id="previewData" class="tabs" hidden>
               <div id="previewToolbar"></div>
-              <div class="full" hidden id="previewNotify"><pre id="previewNotifyText"></pre></div>
+              <div class="full" hidden id="previewNotify"></div>
               <div class="full" hidden id="previewTable"></div>
             </div>
             </div>
@@ -235,6 +235,7 @@ document.addEventListener('mousedown', function(e) {
         if (node && node.icon !== 'fa fa-computer') nodeEl.draggable = true
     }
 })
+
 document.addEventListener('dragstart', function(e) {
     var nodeEl = e.target.closest('.w2ui-node')
     if (!nodeEl) return
@@ -268,7 +269,6 @@ function refreshData(id=0){
     })
     .catch(error => console.error('Error:', error))
 }
-
 
 function getNodeInfo(id){
     w2ui.layout.get('main').tabs.disable('data')
@@ -374,14 +374,19 @@ function runClick(){
         let data = document.getElementById("previewData")
         let error = document.getElementById("previewError")
         let notify = document.getElementById("previewNotify")
-        let notify_text = document.getElementById("previewNotifyText")
         let table = document.getElementById("previewTable")
         error.style.display = "none"
         data.style.display = "block"
         table.style.display = "none"
         notify.style.display = "block"
 
-        notify_text.innerText = result.result.notice
+        if (result.result.id !== undefined && result.result.id !== null) {
+            w2ui.layout.show("preview")
+            multiQuery(result.result.id)
+            return
+        }
+
+        notify.innerHTML = result.result.notice
         if ("columns" in result.result) {
             w2ui.previewToolbar.enable("data")
             w2ui.result_grid.columns = result.result.columns
@@ -429,4 +434,40 @@ async function saveFnunction() {
         w2utils.notify('Ok', {timeout: 2000, success: true, top: 20, right: 20})
     })
     .catch(error => console.error('Error:', error))
+}
+
+function multiQuery(id) {
+    let notify = document.getElementById("previewNotify")
+    notify.innerHTML = ""
+    w2ui.previewToolbar.disable("data")
+    const eventSource = new EventSource('/db?sql='+id);
+
+    eventSource.onerror = function() {
+        eventSource.close();
+    };
+
+    eventSource.onmessage = function(event) {
+        let data = JSON.parse(event.data)
+        switch(data.type){
+            case "query":
+                notify.innerHTML += '<br><b>' + data.val + '</b><br>'
+                break
+            case "ok":
+                notify.innerHTML += '<p style="color: green;">Ok</p>' + data.val + '<hr><br>'
+                break
+            case "ret":
+                if (typeof data.val === 'string') {
+                     notify.innerHTML += data.val + '<br>'
+                } else {
+                    w2ui.previewToolbar.enable("data")
+                    w2ui.result_grid.columns = data.val.columns
+                    w2ui.result_grid.records =data.val.records
+                    w2ui.result_grid.render("#previewTable")
+                }
+                break
+            case "error":
+               notify.innerHTML += '<p style="color: red;">ERROR</p>' + data.val + '<hr><br>'
+               break
+        }
+    };
 }

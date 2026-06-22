@@ -6,72 +6,11 @@ from datetime import datetime
 from pathlib import Path
 from base64 import b64decode
 import shutil, json
+from .multi_sql import get_sql, MultiQuery, hdr_data
+
 
 F_CHK = "noitcnuf e"
-
-def get_sql(script:list, version=None):
-    line, query, status, buf = "", [], "", ""
-    if version is not None:
-        version = float(version)
-
-    def get_ch():
-        nonlocal buf, script, line
-        if buf == "":
-            if len(script) == 0:
-                return ""
-            buf = script[0]
-            script = script[1:]
-            bs = buf.strip()
-            if bs.startswith("--") or buf == "":
-                buf = ""
-                return get_ch()
-            elif bs.startswith("!!"):
-                if version is None:
-                    buf = ""
-                    return get_ch()
-                bs, buf = bs[2:].split("!!", 1)
-                bs = bs.strip()
-                while "..." in bs:
-                    bs = bs.replace("...","..")
-                bs =bs.split("..")
-                if len(bs)==3:
-                    bs = float(bs[0].strip())<=version<=float(bs[1].strip())
-                elif len(bs)==2 and bs[0]=="":
-                    bs = version <= float(bs[1])
-                elif len(bs)==2 and bs[1]=="":
-                    bs = version >= float(bs[0])
-                else:
-                    bs = False
-                if not bs:
-                    buf = ""
-                    return get_ch()
-        ch = buf[0]
-        buf = buf[1:]
-        line += ch
-        return ch
-
-    while script:
-        ch = get_ch()
-        if status:
-            if line.endswith(status):
-                status = ""
-        elif ch == ";":
-            line = line.strip()
-            query.append(line)
-            line = ""
-        elif ch == "$":
-            status = "$"
-            while script:
-                status += get_ch()
-                if status.endswith("$"):
-                    break
-        elif line.endswith("/*"):
-            status = "*/"
-        elif line.endswith("--"):
-            status = "\n"
-    if line:
-        query.append((line + buf).strip())
-    return query
+_VER = None
 
 
 class DbAPI:
@@ -165,18 +104,16 @@ class DbAPI:
 
         schema = await env.sql("select current_database()", ONE)
 
-        exts = await env.sql("""select 'ext.'||e.oid::varchar id, e.extname "text", 'fa fa-cogs' icon 
-        from pg_catalog.pg_extension e""")
+        exts = await env.sql("""select 'ext.'||e.oid::varchar id, e.extname "text", 'fa fa-cogs' icon from pg_catalog.pg_extension e""")
 
-        usr = await env.sql("""select 'u.'||usesysid::varchar id, usename "text", 'fa fa-user' icon 
-        from pg_catalog.pg_user""")
+        usr = await env.sql("""select 'u.'||usesysid::varchar id, usename "text", 'fa fa-user' icon from pg_catalog.pg_user""")
 
         nodes.insert(0, {"id":"db",
             "text": schema,
             "icon": "fa fa-database",
             "nodes": [
                 {"id":"ext", "text":"Расширения", "icon":"fa fa-cog", "nodes":exts},
-                {"id":"usr", "text":"Пользователи", "icon":"fa fa-users", "nodes":usr}
+                {"id":"usr", "text":"Пользователи", "icon":"fa fa-users", "nodes":usr},
             ]
         })
 
@@ -218,7 +155,18 @@ class DbAPI:
             case "mv": return await self.view_info(env, id[1], True)
             case "atr": return await self.attribute_info(env, id[1])
             case "db":  return await self.database_info(env)
+            case "ext":  return await self.ext_info(env)
         return "????"
+
+    async def ext_info(self, env):
+        x = await env.sql("select array_agg(e.extname) from pg_catalog.pg_extension e", ONE)
+        ret = """/*
+    Зарегистрированы расшиерния:
+"""
+        for y in x:
+            ret += "        "  +y + "\n"
+        ret += "*/"
+        return ret
 
     async def schema_info(self, env, id):
         inf = await env.sql("""select n.nspname "name",
@@ -485,40 +433,37 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
     async def do_sql(self, env, sql_b64="", sql="", **kwargs):
         await env.rollback()
         sql = sql if sql else b64decode(sql_b64).decode("utf-8")
-        sql = get_sql(sql)
+        global _VER
+        if not _VER:
+            ver = await env.sql(f"select version()", ONE)
+            ver = ver.split(" ", 2)[1].strip().split(".",2)
+            _VER = f"{ver[0]}.{ver[1]}"
+        sql = get_sql(sql, _VER)
+        if len(sql)>1:
+            q = MultiQuery(sql)
+            return { "id":q.id, "records": None, "columns": None, "notice": None }
+        else:
+            sql = sql[0]
         notify = []
         try:
             async with DB_ENV(notify=notify) as env:
                 t = datetime.now()
-                for x in sql:
-                    ret = await env.sql(x, RAW)
+                ret = await env.sql(sql, RAW)
                 t = datetime.now() - t
         except Exception as e:
             ret = None
             notify.append(f"\nОШИБКА !!!\n{e}")
         notify.insert(0,f"Время выполнения {t}")
-        if len(sql) == 1 and isinstance(ret, list) and len(ret):
-            perc = f"{100 // len(ret[0])}%"
-            hdr = []
-            for x in ret[0]:
-                hdr.append({ "field": x, "text": x, "size": perc, "sortable": True, "searchable": True })
-            for n, x in enumerate(ret):
-                for a in x:
-                    if isinstance(x[a],(dict,list)):
-                        x[a] = json.dumps(x[a], ensure_ascii=False)
-                x = json.dumps(x, ensure_ascii=False, default=str)
-                x = json.loads(x)
-                x["recid"] = n
-                ret[n] = x
-            ret = {"records": ret, "columns": hdr, "notice": notify}
-        elif len(sql) == 1:
-            if isinstance(ret, int) and ret > 0:
-                notify.append(f"Обработано {ret} строк")
-            ret = {"notice": notify}
+        if isinstance(ret, list) and len(ret):
+            ret = hdr_data(ret)
+            ret["notice"] = notify
+            ret["id"] = None
+        elif isinstance(ret, int) and ret > 0:
+            notify.append(f"Обработано {ret} строк")
         else:
             ret = {"notice": notify}
-        ret["notice"] = "\n".join(ret["notice"])
-
+        ret["notice"] = "<br>".join(ret["notice"])
+        ret["id"] = None
         return ret
 
     async def database_info(self, env):

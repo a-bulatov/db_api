@@ -195,13 +195,13 @@ create table meta.class (
     parent_id bigint references meta.class,
     guid uuid unique default uuid_generate_v4() not null,
     title varchar(250) unique not null,
-    store_entity_id bigint not null references meta.entity(id)
+    entity_id bigint not null references meta.entity(id)
 );
 comment on table meta.class is 'классы (онтологии)';
 comment on column meta.class.parent_id is 'ссылка на родительский класс ';
 comment on column meta.class.guid is 'глобальный идентификатор класса';
 comment on column meta.class.title is 'наименование класса для отображения';
-comment on column meta.class.store_entity_id is 'таблица, в которой лежат данные класса (одна на всю иерархию)';
+comment on column meta.class.entity_id is 'таблица, в которой лежат данные класса (одна на всю иерархию)';
 
 create table meta."version" (
 	id bigserial not null primary key,
@@ -226,6 +226,7 @@ alter table meta.entity add column version_id bigint references meta.version(id)
 create table meta."attribute" (
 	id bigserial primary key,
 	entity_id integer not null references meta.entity(id) on delete cascade,
+	npp integer,
 	"name" varchar(100) not null,
 	title varchar(250) not null,
 	type_id integer null references meta.data_type(id),
@@ -234,7 +235,9 @@ create table meta."attribute" (
 	flags integer[],
 	constraint attribute_name_unique unique(entity_id,"name")
 );
-
+comment on column meta."attribute".entity_id is 'ссылка на таблицу к которой относится атрибут';
+comment on column meta."attribute".npp is 'порядковый номер в таблице. если не задан, то определяется по id';
+comment on column meta."attribute"."name" is 'имя атрибута, уникальное в пределах таблицы';
 
 create table "data"."row" (
 	id bigserial  primary key,
@@ -272,7 +275,7 @@ begin
    left join meta.version v on v.guid = (f_params->>'version_guid')::uuid
    left join meta.class cl on cl.guid = (f_params->>'сlass_guid')::uuid
    left join meta.entity e on e.version_id = v.id
-   			or (v.id is null and e.id = cl.store_entity_id)
+   			or (v.id is null and e.id = cl.entity_id)
    			or (v.id is null and cl.id is null and e.guid = (f_params->>'guid')::uuid)
    left join meta.version v1 on v1.entity_id = e.id and v1.id = coalesce(v.id, e.version_id);
 
@@ -635,7 +638,7 @@ create function data.eav_insert()
  RETURNS trigger
  LANGUAGE plpgsql
  SECURITY DEFINER
-AS $data_eav_insert__2026_06_19$
+AS $data_eav_insert__2026_06_20$
 begin
     execute format(
       'insert into data.eav_%s values ($1.*)',
@@ -643,7 +646,7 @@ begin
     ) using new;
     return null;
 end
-$data_eav_insert__2026_06_19$;
+$data_eav_insert__2026_06_20$;
 
 create function data.eav_update()
  RETURNS trigger
@@ -1316,9 +1319,9 @@ $$;
 
 
 create function data.filter(f_version_id bigint, f_params jsonb)
-returns table(id bigint, npp integer)
-language plpgsql
-as $$
+ RETURNS TABLE(id bigint, npp integer)
+ LANGUAGE plpgsql
+AS $data_filter__2026_06_22$
 declare
    v_query text = '';
    v_limits text;
@@ -1340,18 +1343,21 @@ begin
    end;
 
    if (f_params->>'filter') is null and (f_params->>'order') is null then
-        --- без фильтра и сортировки, только limit и offest
-        v_query = format($q$select x.id, row_number() over (order by x.id)::integer npp
-             from (select t.id from data.eav_%s t group by id order by t.id
-             %s) x$q$, v_version.id, v_limits);
+        v_query = format($q$
+			select x.id, row_number() over (order by x.id)::integer npp
+            from (
+			  select t.id 
+			  from data.eav_%s t 
+			  group by id 
+			  order by t.id
+        %s) x$q$, v_version.id, v_limits);
    elseif (f_params->>'filter') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
-        --- выбор одной строки. limit и offest игнорируем
         v_query = format($q$select x.id, 1::integer npp from data.row x where x.guid=%L::uuid$q$, f_params->>'filter');
    end if;
 
    return query execute v_query;
 end
-$$;
+$data_filter__2026_06_22$;
 
 
 create function data.filter_rvt(f_version_id bigint, f_params jsonb)
@@ -1440,12 +1446,12 @@ $$;
 create function data.sheet_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_get__2026_06_19$
+AS $data_sheet_get__2026_06_22$
 declare
    v_sheet record;
    v_ret jsonb;
    t_tmp text;
-   v_fields varchar(100)[];
+   tmp_rec record;
 begin
    if f_params is null or f_params::varchar='{}'  then
       f_params = jsonb_build_object('guid', uuid_nil());
@@ -1458,7 +1464,12 @@ begin
        v1.guid version_guid,
        v1.status,
        e1.f_read,
-	   e1.entity_type
+	   e1.entity_type,
+	   (select array_agg(a."name")		  
+		from meta.attribute a
+		left join jsonb_array_elements_text(f_params->'fields') AS elem on a."name" = elem::varchar
+		where a.entity_id = e1.id and ((f_params->'fields') is null or elem is not null)
+	   ) fields
    into v_sheet
    from (select 1) fake
    left join meta.version v on v.guid = (f_params->>'version_guid')::uuid
@@ -1466,19 +1477,62 @@ begin
    left join meta.version v1 on v1.id = coalesce(v.id, e.version_id)
    left join meta.entity e1 on e1.id=coalesce(v1.entity_id, e.id);
 
-
    if v_sheet.id is Null then
-        return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
+   -- таблица не найдена
+        return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid')); 	
+   elseif coalesce((f_params->>'debug')::boolean, false) then
+   -- отладка - формирование sql, который вернет таблицу как обычную реляционную
+		f_params = f_params - 'debug'; 
+		t_tmp = 'select (tbl.value->>''guid'')::uuid pk_guid ';
+		for tmp_rec in
+			select a."name", t."key" tp_key, t.eav_field
+			from meta.attribute a
+			inner join meta.data_type t on t.id = a.type_id
+			where a.entity_id = v_sheet.id and a.name = any(v_sheet.fields)
+		loop
+			t_tmp = t_tmp||','||case
+  				when tmp_rec.tp_key = 'I' then format($q$(tbl.value->'data'->>'%s')::bigint$q$, tmp_rec."name")
+				when tmp_rec.tp_key = 'G' then format($q$(tbl.value->'data'->>'%s')::uuid$q$, tmp_rec."name")
+				when tmp_rec.tp_key = 'D' then format($q$(tbl.value->'data'->>'%s')::double precision$q$, tmp_rec."name")
+				when tmp_rec.tp_key = 'T' then format($q$(tbl.value->'data'->>'%s')::timestamp$q$, tmp_rec."name")
+  				else format($q$(tbl.value->'data'->>'%s')$q$, tmp_rec."name")
+  			end||' as '||quote_ident(tmp_rec."name");
+		end loop;
+		t_tmp = format($q$%s
+from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params);
+		return jsonb_build_object('query', t_tmp);
    elseif v_sheet.f_read is not Null then
+   -- вызов спецю функции чтения, если задана для таблицы
         t_tmp = format($q$select %s('%s')$q$, v_sheet.f_read,f_params);
         execute t_tmp into v_ret;
+   elseif v_sheet.fields is null and v_sheet.entity_type='EAV' then
+   -- возврат только идентификаторов EAV
+   		select array_to_json(array_agg(
+		   jsonb_strip_nulls(jsonb_build_object('guid', x.guid, 'class', x.class_guid))
+	    ))
+	    into v_ret
+		from (
+		  select r.guid,  c.guid class_guid
+		  from data.filter(v_sheet.version_id, f_params) ff
+		  inner join data.row r on r.id = ff.id
+		  left join meta.class c on r.class_id = c.id
+		  order by ff.npp
+		) x;
+   elseif v_sheet.fields is null and v_sheet.entity_type='RVT' then
+   -- возврат только идентификаторов RVT
+   		select array_to_json(array_agg(
+		   jsonb_strip_nulls(jsonb_build_object('guid', x.guid, 'class', x.class_guid))
+	    ))
+	    into v_ret
+		from (
+		  select r.guid,  c.guid class_guid
+		  from data.filter_rvt(v_sheet.version_id, f_params) ff
+		  inner join data.row r on r.id = ff.id
+		  left join meta.class c on r.class_id = c.id
+		  order by ff.npp
+		) x;
    elseif v_sheet.entity_type='EAV' then
-	   	if (f_params->>'fields') is not null then
-		  select array_agg(elem::varchar)
-		  into v_fields
-		  from jsonb_array_elements_text(f_params->'fields') AS elem;
-	   	end if;
-
+   -- возврат данных EAV
 	   	with refs as (
 		   select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key"
 			   from meta.attribute a
@@ -1529,7 +1583,7 @@ begin
 					   and me.version_id = refs.version_id
 					   and me.attribute_id = atr.ref_attribute_id
 				   where mr.guid = any(eav.s::uuid[])
-			   )) -- M
+			   )) --
 			   when dt.key ='r' then rv.value
 			   else to_jsonb(eav.s)
 		   end
@@ -1554,11 +1608,12 @@ begin
 		  left join  data.row geav on geav.id = reav.id
 		  left join  meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
 		  left join  meta.class cla on cla.id = r.class_id
-		  where v.id = v_sheet.version_id and (v_fields is null or atr."name" = any(v_fields))
+		  where v.id = v_sheet.version_id and atr."name" = any(v_sheet.fields)
 		  group by r.guid, fltr.npp, cla.guid
 		  order by fltr.npp
 		 ) x;
    elseif v_sheet.entity_type='RVT' then
+   -- возврат данных RVT
 		select jsonb_agg(x.val)
 		into v_ret
 		from (select jsonb_strip_nulls(
@@ -1583,4 +1638,4 @@ begin
 
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
-$data_sheet_get__2026_06_19$;
+$data_sheet_get__2026_06_22$;

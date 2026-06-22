@@ -8,7 +8,9 @@ import socket
 from ab_engine.env import DB_ENV
 from ab_engine.db.option import *
 from ab_engine import register_rpc, Config
-from .db_api import DbAPI, get_sql
+from .db_api import DbAPI
+from .multi_sql import get_sql, MultiQuery
+from sse_starlette import EventSourceResponse
 
 
 _PREFIX = ""  # префикс URL
@@ -132,6 +134,10 @@ async def db_page(request):
         async with DB_ENV() as env:
             _DB = await env.sql("select current_database()", ONE)
             _DB = socket.gethostname() + " : " + _DB
+    if x:=request.query_params.get('sql'):
+        x = MultiQuery.worker(x)
+        if x:
+            return EventSourceResponse(x())
     x = html("web/db.html")
     return HTMLResponse(x)
 
