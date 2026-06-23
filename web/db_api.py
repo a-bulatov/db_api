@@ -4,14 +4,16 @@ from ab_engine.env import DB_ENV
 from inspect import iscoroutinefunction
 from datetime import datetime
 from pathlib import Path
-from base64 import b64decode
-import shutil, json
+from base64 import b64decode, b64encode
+import shutil
 from .multi_sql import get_sql, MultiQuery, hdr_data
-
+from .save_struct import DB_Saver
+from .restore_struct import DB_Restore
+from yaml import safe_dump as yaml_dump, safe_load as yaml_load
+from io import StringIO
 
 F_CHK = "noitcnuf e"
 _VER = None
-
 
 class DbAPI:
     """
@@ -505,7 +507,6 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
         fname, fdefs = fname.split("(", 1)
         fl , fname = fname.rsplit(" ", 1) # имя функции без create
         fl = Path(Config().defaults["script"])
-        shutil.copy(str(fl), str(fl.parent / f"{fl.stem} bak_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}{fl.suffix}")) # копируем старый файл
         with open(fl, "r") as f:
             data = f.read()
         pos = 0
@@ -543,8 +544,45 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
             data, right_data = right_data.split(f"${data}$", 1)
         # в left_data то что должно быть до имени функции, в right_data то что после функции
         x = f"${fname.replace('.','_')}__{datetime.now().strftime('%Y_%m_%d')}$"
+        # !!Доделать!! обработку ситуации, когда у функции есть комментарий
         data = left_data + fname + "(" + fdefs + x + sql_b64 + x + right_data
+        self.do_save_script(data=data)
+        return {}
+
+    @staticmethod
+    def do_save_script(sql_b64=None, data=None, **kwargs):
+        if data is None:
+            data = b64decode(sql_b64).decode("utf-8").strip()
+        fl = Path(Config().defaults["script"])
+        shutil.copy(str(fl), str(fl.parent / f"{fl.stem} bak_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}{fl.suffix}"))
         with open(fl, "w") as f:
             f.write(data.strip())
-        # !!Доделать!! обработку ситуации, когда у функции есть комментарий
-        return {}
+
+    @staticmethod
+    def do_load_script(**kwargs):
+        fl = Path(Config().defaults["script"])
+        with open(fl, "r") as f:
+            data = f.read()
+        return data
+
+    @staticmethod
+    def do_save_struct(**kwargs):
+        db = Config().database
+        sav = DB_Saver(db)
+        db = sav()
+        with StringIO() as f:
+            yaml_dump(dict(db), f, encoding=False, allow_unicode=True, sort_keys=False)
+            db = f.getvalue()
+        return db
+
+    @staticmethod
+    def do_check_struct(data_64, **kwargs):
+        data_64 = b64decode(data_64).decode("utf-8").strip()
+        #return data_64
+        db = Config().database
+        rest = DB_Restore(db, True)
+        data_64 = yaml_load(data_64)
+        db = rest(data_64)
+        if db=="":
+            db = "/* Отличий не найдено */"
+        return db

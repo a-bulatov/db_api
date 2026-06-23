@@ -192,6 +192,7 @@ new w2sidebar({
     </div>`,
     name: 'sidebar',
     nodes: [],
+    menu: [],
     onClick: function (event) {
          let main = w2ui.layout.get('main')
          if(main.tabs.active != "console") w2ui.layout.hide('preview')
@@ -221,6 +222,46 @@ new w2sidebar({
     onMouseLeave: function() {
         var tip = document.getElementById('sb_tip');
         if (tip) tip.style.display = 'none';
+    },
+    onContextMenu(event) {
+         if (event.target == 'db') {
+             this.menu = [
+                 {{FL_MENU}}
+                 { id: 'ptrn.gen', text: 'Создать шаблон', icon: 'fa fa-cube' },
+                 { id: 'ptrn.chk', text: 'Сравнить шаблон', icon: 'fa fa-exchange' },
+                 { text: '--' },
+                 { id: 'model.gen', text: 'Модель данных', icon: 'fa fa-th' },
+                 { text: '--' },
+                 { id: 'refresh', text: 'Обновить', icon: 'fa fa-refresh' }
+             ]
+         } else if (event.target.startsWith('sh.')) {
+             this.menu = [
+                  { id: 'model.gen', text: 'Модель данных', icon: 'fa fa-th' },
+                  { text: '--' },
+                  { id: 'refresh', text: 'Обновить', icon: 'fa fa-refresh' }
+             ]
+         } else {
+             this.menu = []
+         }
+    },
+    onMenuClick(event) {
+         w2utils.notify(`Selected "${event.detail.menuItem.id}"`)
+         switch(event.detail.menuItem.id) {
+           case "init.load":
+               loadScript()
+               break
+           case "init.save":
+               w2confirm('Сохранение скрипта приведет к замене скрипта инициализации БД!<br>Отменить сохранение скрипта?')
+                   .yes(() => {})
+                   .no(saveScript)
+               break
+           case "ptrn.gen":
+               createPattern()
+               break
+           case "ptrn.chk":
+               document.getElementById('patternFile').click()
+               break
+         }
     }
 })
 
@@ -296,39 +337,57 @@ function getNodeInfo(id){
     .catch(error => console.error('Error:', error))
 }
 
+function loadScript() {
+    fetch('/db', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({"method": "db", "params":{"do": "load_script"}})
+    }).then(response => response.json())
+    .then(result => {
+        let editor = w2ui.layout.get("main").tabs.active == "info" ? window.info_editor : window.console_editor
+        editor.setValue(result.result)
+    })
+    .catch(error => console.error('Error:', error))
+}
+
+async function saveFunction() {
+    let sql_text = window.info_editor.getValue()
+    fetch('/db', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({"method": "db", "params":{"do": "save_fn", "sql_b64": btoa(unescape(encodeURIComponent(sql_text)))}})
+    }).then(response => response.json())
+    .then(result => {
+        w2utils.notify('Ok', {timeout: 2000, success: true, top: 20, right: 20})
+    })
+    .catch(error => console.error('Error:', error))
+}
+
+function saveScript() {
+    let sql_text = (w2ui.layout.get("main").tabs.active == "info" ? window.info_editor : window.console_editor).getValue()
+    fetch('/db', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({"method": "db", "params":{"do": "save_script", "sql_b64": btoa(unescape(encodeURIComponent(sql_text)))}})
+    }).then(response => response.json())
+    .then(result => {
+        w2utils.notify('Ok', {timeout: 2000, success: true, top: 20, right: 20})
+    })
+    .catch(error => console.error('Error:', error))
+}
+
 function AutocompleteTrigger(cm, change) {
     if (change && change.text && change.text[0] && (change.text[0] === ' ' || change.text[0] === '.')) {
         setTimeout(function() {
             cm.showHint();
         }, 10);
     }
-}
-
-window.onload = function() {
-   window.info_editor = CodeMirror(document.getElementById('infoEditor'), Object.assign({},editor_conf))
-   window.console_editor = CodeMirror(document.getElementById('consoleEditor'), Object.assign({},editor_conf,{autofocus:false}))
-   window.info_editor.on("inputRead", AutocompleteTrigger)
-   window.console_editor.on("inputRead", AutocompleteTrigger)
-
-   // drag-drop из sidebar в редакторы codemirror
-   function setupDragDrop(cm) {
-       var wr = cm.getWrapperElement()
-       wr.addEventListener('dragover', function(e) { e.preventDefault() })
-       wr.addEventListener('drop', function(e) {
-           e.preventDefault()
-           var text = e.dataTransfer.getData('text/plain')
-           if (text) {
-               var pos = cm.coordsChar({left:e.clientX, top:e.clientY}, 'window')
-               cm.replaceRange(text, pos)
-               cm.focus()
-               cm.setCursor({line:pos.line, ch:pos.ch + text.length})
-           }
-       })
-   }
-   setupDragDrop(window.info_editor)
-   setupDragDrop(window.console_editor)
-
-   refreshMeta()
 }
 
 function refreshMeta(){
@@ -351,10 +410,12 @@ function refreshMeta(){
           if (sel === null) sel = result.result.sidebar[0]["id"]
           sidebar.refresh()
           sidebar.click(sel)
-          let tabs = w2ui.layout.get('main').tabs
-          tabs.click(tabs.active)
+
           window.console_editor.setOption("hintOptions",{"tables":result.result.tables})
           window.info_editor.setOption("hintOptions",{"tables":result.result.tables})
+
+          let tabs = w2ui.layout.get('main').tabs
+          if (tabs) tabs.click(tabs.active)
     })
     .catch(error => console.error('Error:', error))
 }
@@ -421,21 +482,6 @@ async function copyToClipboard(text) {
   }
 }
 
-async function saveFnunction() {
-    let sql_text = window.info_editor.getValue()
-    fetch('/db', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({"method": "db", "params":{"do": "save_fn", "sql_b64": btoa(unescape(encodeURIComponent(sql_text)))}})
-    }).then(response => response.json())
-    .then(result => {
-        w2utils.notify('Ok', {timeout: 2000, success: true, top: 20, right: 20})
-    })
-    .catch(error => console.error('Error:', error))
-}
-
 function multiQuery(id) {
     let notify = document.getElementById("previewNotify")
     notify.innerHTML = ""
@@ -470,4 +516,91 @@ function multiQuery(id) {
                break
         }
     };
+}
+
+function createPattern() {
+	let el = document.getElementById("layout_layout_panel_left")
+    w2utils.lock(el, { spinner: true, msg: 'Создание шаблона...' })
+    fetch('/db', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({"method": "db", "params":{"do": "save_struct"}})
+    }).then(response => response.json())
+    .then(result => {
+        const blob = new Blob([result.result], { type: 'text/plain' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = 'db_pattern.yaml'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+        w2utils.unlock(el)
+    })
+    .catch(error => {console.error('Error:', error), w2utils.unlock(el)})
+}
+
+function checkPattern(fl_input) {
+	const file = fl_input.target.files[0]
+    if (!file) return
+
+    const reader = new FileReader()
+
+    reader.onload = function(event) {
+        let el = document.getElementById("layout_layout_panel_left")
+        w2utils.lock(el, { spinner: true, msg: 'Сравнивание шаблона...' })
+        fetch('/db', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({"method": "db", "params":{"do": "check_struct", "data_64": btoa(unescape(encodeURIComponent(event.target.result)))}})
+        }).then(response => response.json())
+        .then(result => {
+            let editor = w2ui.layout.get("main").tabs.active == "console" ? window.console_editor  : window.info_editor
+            editor.setValue(result.result)
+            w2utils.unlock(el)
+        })
+        .catch(error => {console.error('Error:', error), w2utils.unlock(el)})
+    }
+
+    reader.onerror = function() {
+        console.error('Ошибка чтения файла')
+    }
+
+    reader.readAsText(file)
+}
+
+//----------------------------------------------------------------------------------------
+
+window.onload = function() {
+   window.info_editor = CodeMirror(document.getElementById('infoEditor'), Object.assign({},editor_conf))
+   window.console_editor = CodeMirror(document.getElementById('consoleEditor'), Object.assign({},editor_conf,{autofocus:false}))
+   window.info_editor.on("inputRead", AutocompleteTrigger)
+   window.console_editor.on("inputRead", AutocompleteTrigger)
+
+   // drag-drop из sidebar в редакторы codemirror
+   function setupDragDrop(cm) {
+       var wr = cm.getWrapperElement()
+       wr.addEventListener('dragover', function(e) { e.preventDefault() })
+       wr.addEventListener('drop', function(e) {
+           e.preventDefault()
+           var text = e.dataTransfer.getData('text/plain')
+           if (text) {
+               var pos = cm.coordsChar({left:e.clientX, top:e.clientY}, 'window')
+               cm.replaceRange(text, pos)
+               cm.focus()
+               cm.setCursor({line:pos.line, ch:pos.ch + text.length})
+           }
+       })
+   }
+   setupDragDrop(window.info_editor)
+   setupDragDrop(window.console_editor)
+
+   document.getElementById('patternFile').addEventListener('change', checkPattern)
+
+   refreshMeta()
 }

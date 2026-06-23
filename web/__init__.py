@@ -16,11 +16,13 @@ from sse_starlette import EventSourceResponse
 _PREFIX = ""  # префикс URL
 _DB = ""      # название базы данных с которой работает админка
 _FN_SAVE = "" # код кнопки сохранения функции в файл
+_FL_MENU = "" # код меню для скрипта БД
 
 def page_replaces(content):
     content=content.replace("{{DB_NAME}}",_DB)
     content=content.replace("{{PREFIX}}",_PREFIX)
     content=content.replace("{{FN_SAVE}}",_FN_SAVE)
+    content=content.replace("{{FL_MENU}}",_FL_MENU)
     return content
 
 
@@ -98,9 +100,6 @@ class StaticFiles:
             response = Response("Not Found", status_code=404)
             await response(scope, receive, send)
 
-
-
-
 def html(file_name):
     with open(file_name) as f:
         page = f.read()
@@ -175,6 +174,9 @@ def admin_routes(url_prefix:str="", use_db=True) -> list[Route]:
         if Config().hasattr("defaults"):
             x = Config().defaults.get("script")
             if x:
-                global _FN_SAVE
-                _FN_SAVE = '<button id="fn-saver" class="w2ui-btn action" onclick="saveFnunction()" title="Сохранить"><i class="fas fa-save"></i></button>'
+                global _FN_SAVE, _FL_MENU
+                _FN_SAVE = '<button id="fn-saver" class="w2ui-btn action" onclick="saveFunction()" title="Сохранить"><i class="fas fa-save"></i></button>'
+                _FL_MENU = """{ id: 'init.load', text: 'Загрузить скрипт', icon: 'fa fa-folder-open' },
+                 { id: 'init.save', text: 'Cохранить скрипт', icon: 'fa fa-save' },
+                 { text: '--' },"""
     return ret
