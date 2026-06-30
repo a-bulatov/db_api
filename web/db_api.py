@@ -11,6 +11,7 @@ from .save_struct import DB_Saver
 from .restore_struct import DB_Restore
 from yaml import safe_dump as yaml_dump, safe_load as yaml_load
 from io import StringIO
+from re import search
 
 F_CHK = "noitcnuf e"
 _VER = None
@@ -80,7 +81,7 @@ class DbAPI:
                  select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-caret-right' "icon",
                     (string_to_array(col_description(c.oid, a.attnum),chr(10)))[1] tooltip
                  from pg_catalog.pg_attribute a
-                 where a.attnum > 0 and a.attrelid = c.oid
+                 where a.attnum > 0 and a.attrelid = c.oid and a.attstattarget!=0 and a.attstattarget!=0
                  order by a.attnum
               ) fld ) nodes
               from pg_catalog.pg_class c
@@ -92,8 +93,8 @@ class DbAPI:
             ) x)	
           )) "nodes"
         from pg_catalog.pg_namespace ns
-        -- where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
-        where ns.nspname not in ('pg_catalog', 'information_schema')
+        where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
+        -- where ns.nspname not in ('pg_catalog', 'information_schema')
         order by ns.nspname""")
         tables = await self.pg_catalog(env)
 
@@ -129,7 +130,7 @@ class DbAPI:
           from (
             select a.attname
             from pg_catalog.pg_attribute a
-            where a.attnum > 0 and a.attrelid = c.oid
+            where a.attnum > 0 and a.attrelid = c.oid and a.attstattarget!=0
             order by a.attnum
           ) sa
          ) flds
@@ -243,7 +244,7 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
                 pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) "default"
             from pg_catalog.pg_attribute a
             left join pg_attrdef ad on a.attrelid = ad.adrelid and a.attnum = ad.adnum
-            where a.attnum>0 and a.attrelid = $1
+            where a.attnum>0 and a.attrelid = $1 and a.attstattarget!=0
             order by a.attnum""", id, OBJECT)
         for x in defs:
             add_def = True
@@ -285,7 +286,7 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
                         select row_number() over () n, unnest v
                         from unnest(cons.conkey)
                         ) x
-                        inner join pg_catalog.pg_attribute fa on fa.attnum = x.v and fa.attrelid=tbl.oid
+                        inner join pg_catalog.pg_attribute fa on fa.attnum = x.v and fa.attrelid=tbl.oid and fa.attstattarget!=0
                         order by x.n
                     ) x
                 ))
@@ -299,7 +300,7 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
                             select row_number() over () n, unnest v
                             from unnest(cons.confkey)
                             ) x
-                            inner join pg_catalog.pg_attribute fa on fa.attnum = x.v and fa.attrelid=cons.confrelid
+                            inner join pg_catalog.pg_attribute fa on fa.attnum = x.v and fa.attrelid=cons.confrelid and fa.attstattarget!=0
                             order by x.n
                         ) x
                     )
@@ -386,7 +387,6 @@ truncate table {t['t']} cascede; -- для очистки данных табл�
 
         return ret + "\n*/"
 
-
     async def view_info(self, env, id, materialized):
         if materialized:
             return f"-- мат. представление { id }"
@@ -408,7 +408,7 @@ truncate table {t['t']} cascede; -- для очистки данных табл�
         JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
         JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
         LEFT JOIN  pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
-        WHERE c.oid = $1 AND a.attnum = $2 """, id, attr, ROW, OBJECT)
+        WHERE a.attstattarget!=0 and c.oid = $1 AND a.attnum = $2 """, id, attr, ROW, OBJECT)
         info = f"""/*
 Атрибут {attr.attribute_name} таблицы {attr.table_name}
 Тип атрибута: {attr.data_type}
@@ -447,6 +447,7 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
         else:
             sql = sql[0]
         notify = []
+        err_line = None
         try:
             async with DB_ENV(notify=notify) as env:
                 t = datetime.now()
@@ -454,18 +455,23 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
                 t = datetime.now() - t
         except Exception as e:
             ret = None
-            notify.append(f"\nОШИБКА !!!\n{e}")
+            e = f"\nОШИБКА !!!\n{e}"
+            notify.append(e)
+            m = search(r'LINE\s+(\d+)', e)
+            if m:
+                err_line = m.group(1)
         notify.insert(0,f"Время выполнения {t}")
         if isinstance(ret, list) and len(ret):
             ret = hdr_data(ret)
-            ret["notice"] = notify
-            ret["id"] = None
         elif isinstance(ret, int) and ret > 0:
             notify.append(f"Обработано {ret} строк")
+            ret = {}
         else:
-            ret = {"notice": notify}
-        ret["notice"] = "<br>".join(ret["notice"])
+            ret = {}
+        ret["notice"] = "<br>".join(notify)
         ret["id"] = None
+        if err_line is not None:
+            ret['line'] = err_line
         return ret
 
     async def database_info(self, env):

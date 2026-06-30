@@ -11,18 +11,21 @@ from ab_engine import register_rpc, Config
 from .db_api import DbAPI
 from .multi_sql import get_sql, MultiQuery
 from sse_starlette import EventSourceResponse
+from .model import db_model
 
 
 _PREFIX = ""  # префикс URL
 _DB = ""      # название базы данных с которой работает админка
 _FN_SAVE = "" # код кнопки сохранения функции в файл
 _FL_MENU = "" # код меню для скрипта БД
+_DBG_API = ""
 
 def page_replaces(content):
     content=content.replace("{{DB_NAME}}",_DB)
     content=content.replace("{{PREFIX}}",_PREFIX)
     content=content.replace("{{FN_SAVE}}",_FN_SAVE)
     content=content.replace("{{FL_MENU}}",_FL_MENU)
+    content=content.replace("{{DBG_API}}",_DBG_API)
     return content
 
 
@@ -128,16 +131,22 @@ async def db_page(request):
                 x = {"error": str(e)}
         return JSONResponse(x)
 
-    global _DB
+    global _DB, _DBG_API
     if not _DB:
         async with DB_ENV() as env:
             _DB = await env.sql("select current_database()", ONE)
             _DB = socket.gethostname() + " : " + _DB
-    if x:=request.query_params.get('sql'):
+            x = await env.sql("select 1 from pg_catalog.pg_extension e where e.extname='pldbgapi'", ONE)
+            if x==1:
+                _DBG_API = '<button id="fn-debug" class="w2ui-btn action" onclick="startDebug()" title="Отладка"><i class="fas fa-bug"></i></button>'
+    if x:=request.query_params.get('model'):
+        x = await db_model(x)
+        x = page_replaces(x)
+    elif x:=request.query_params.get('sql'):
         x = MultiQuery.worker(x)
-        if x:
-            return EventSourceResponse(x())
-    x = html("web/db.html")
+        return EventSourceResponse(x())
+    else:
+        x = html("web/db.html")
     return HTMLResponse(x)
 
 

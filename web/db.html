@@ -26,11 +26,16 @@
             border: none;
             cursor: pointer;
           }
+        .cm-error-line {
+          background-color: #ffebeb; /* светло-красный фон */
+          color: #b00020;            /* цвет текста */
+         }
     </style>
 </head>
 <body>
 
 <input type="file" id="patternFile" style="display: none;" accept=".yaml, .txt">
+<button id="modelBtn" style="display: none;" onclick="openModel()" title="">model</button>
 <div id="layout" style="position: absolute;
     top: 0;
     left: 0;

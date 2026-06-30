@@ -1,7 +1,7 @@
 from datetime import datetime
 from ab_engine.env import DB_ENV
 from ab_engine.db.option import RAW, ONE
-from base64 import b64encode
+from asyncio import sleep
 import asyncio, json
 
 
@@ -148,4 +148,6 @@ class MultiQuery:
         except Exception as e:
             yield {"data": json.dumps({"type":"error", "val":str(e)})}
         finally:
+            yield {"data":json.dumps({"type": "end", "val":""}) }
+            await sleep(1)
             MultiQuery.workers.remove(self)

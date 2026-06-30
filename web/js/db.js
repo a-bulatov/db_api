@@ -1,4 +1,5 @@
 const pstyle = 'border: 1px solid #efefef; padding: 5px'
+const lineMarks = []
 document.addEventListener('mousemove', function(e) { window._lastMouse = e })
 const editor_conf = {
        //theme: 'idea',
@@ -31,6 +32,7 @@ new w2layout({
                      { id: 'console', text: 'Консоль' },
                  ],
                  onClick(event) {
+                      clearMarks()
                       let info = document.getElementById('infoEditor')
                       let cons = document.getElementById('consoleEditor')
                       let data = document.getElementById('dataGrid')
@@ -59,7 +61,7 @@ new w2layout({
                 <div id="infoEditor" class="full">
                     <div id="funcExts" class="custom-rt" hidden>
                     {{FN_SAVE}}
-                    <button id="fn-debug" class="w2ui-btn action" onclick="run()" title="Отладка"><i class="fas fa-bug"></i></button>
+                    {{DBG_API}}
                     </div>
                 </div>
                 <div id="consoleEditor" class="full" hidden></div>
@@ -224,7 +226,9 @@ new w2sidebar({
         if (tip) tip.style.display = 'none';
     },
     onContextMenu(event) {
-         if (event.target == 'db') {
+         //const targetId = event.target;
+         const targetId = w2ui.sidebar.selected;
+         if (targetId == 'db') {
              this.menu = [
                  {{FL_MENU}}
                  { id: 'ptrn.gen', text: 'Создать шаблон', icon: 'fa fa-cube' },
@@ -234,7 +238,7 @@ new w2sidebar({
                  { text: '--' },
                  { id: 'refresh', text: 'Обновить', icon: 'fa fa-refresh' }
              ]
-         } else if (event.target.startsWith('sh.')) {
+         } else if (targetId.startsWith('sh.')) {
              this.menu = [
                   { id: 'model.gen', text: 'Модель данных', icon: 'fa fa-th' },
                   { text: '--' },
@@ -245,7 +249,6 @@ new w2sidebar({
          }
     },
     onMenuClick(event) {
-         w2utils.notify(`Selected "${event.detail.menuItem.id}"`)
          switch(event.detail.menuItem.id) {
            case "init.load":
                loadScript()
@@ -260,6 +263,13 @@ new w2sidebar({
                break
            case "ptrn.chk":
                document.getElementById('patternFile').click()
+               break
+           case "refresh":
+               refreshMeta()
+               break
+           case "model.gen":
+               const btn = document.getElementById(`modelBtn`)
+               btn.click()
                break
          }
     }
@@ -390,7 +400,13 @@ function AutocompleteTrigger(cm, change) {
     }
 }
 
+function clearMarks() {
+    lineMarks.forEach(m => m.clear())
+    lineMarks.length = 0
+}
+
 function refreshMeta(){
+    clearMarks()
     fetch('/db', {
       method: 'POST',
       headers: {
@@ -420,10 +436,15 @@ function refreshMeta(){
     .catch(error => console.error('Error:', error))
 }
 
-function runClick(){
+function runClick() {
+    clearMarks()
     let editor = w2ui.layout.get("main").tabs.active == "console" ? window.console_editor  : window.info_editor
     let sql_text = editor.getSelection()
-    if(sql_text == "") sql_text = editor.getValue()
+    let ctx = true
+    if(sql_text == "") {
+        ctx = false
+        sql_text = editor.getValue()
+    }
     fetch('/db', {
         method: 'POST',
         headers: {
@@ -448,6 +469,13 @@ function runClick(){
         }
 
         notify.innerHTML = result.result.notice
+        if (Object.hasOwn(result.result, "line") && !ctx) {
+            const mark = editor.markText(
+              { line: result.result.line - 1, ch: 0 }, // начало выделения {строка, символ в строке}
+              { line: result.result.line - 1, ch: editor.getLine(result.result.line - 1).length }, // конец выделения
+              { className: 'cm-error-line' })
+            lineMarks.push(mark)
+        }
         if ("columns" in result.result) {
             w2ui.previewToolbar.enable("data")
             w2ui.result_grid.columns = result.result.columns
@@ -514,6 +542,9 @@ function multiQuery(id) {
             case "error":
                notify.innerHTML += '<p style="color: red;">ERROR</p>' + data.val + '<hr><br>'
                break
+            case "end":
+               notify.innerHTML += 'Выполнение завершено!'
+               break
         }
     };
 }
@@ -572,6 +603,33 @@ function checkPattern(fl_input) {
     }
 
     reader.readAsText(file)
+}
+
+function openModel() {
+	window.open(`/db?model=${w2ui.sidebar.selected}`);
+}
+
+function startDebug(){
+    w2ui.layout.hideTabs('main')
+    w2ui.layout.hide("left")
+    let start_dbg = document.getElementById("funcExts")
+    start_dbg.style.display = 'none'
+    window.info_editor.setOption('readOnly', 'nocursor')
+    let data = document.getElementById("previewData")
+    let error = document.getElementById("previewError")
+    let notify = document.getElementById("previewNotify")
+    let table = document.getElementById("previewTable")
+    error.style.display = "none"
+    data.style.display = "block"
+    table.style.display = "none"
+    notify.style.display = "block"
+    w2ui.result_grid.columns = [
+       { field: 'key', text: 'Переменная', size: '30%' },
+       { field: 'value', text: 'Значение', size: '100%' }
+    ]
+    w2ui.result_grid.records = [{"key":"","value":""}]
+    w2ui.layout.show("preview")
+    w2ui.result_grid.render("#previewTable")
 }
 
 //----------------------------------------------------------------------------------------
