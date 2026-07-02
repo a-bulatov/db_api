@@ -135,12 +135,8 @@ new w2grid({
                case "clipbrd":
                    copyToClipboard(String(val))
                    break
-               case "view":
-                   w2popup.open({
-                       title: this.columns[column].text,
-                       text: String(val),
-                       resizable: true
-                   })
+                case "view":
+                    fieldPopup(val, this.columns[column].text)
                    break
          }
      },
@@ -170,11 +166,7 @@ new w2grid({
                 copyToClipboard(String(val))
                 break
             case "view":
-                w2popup.open({
-                    title: this.columns[column].text,
-                    text: String(val),
-                    resizable: true
-                })
+                fieldPopup(val, this.columns[column].text)
                 break
       }
   },
@@ -297,6 +289,21 @@ document.addEventListener('dragstart', function(e) {
         e.dataTransfer.effectAllowed = 'copy'
     }
 })
+
+function fieldPopup(text, title="Значение:") {
+    text = String(text)
+
+    text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"')
+
+    w2popup.open({
+        title: title,
+        body: '<div style="padding:10px"><pre>' + text + '</pre></div>',
+        showMax: true,
+        blockPage: false,
+        resizable: true,
+    })
+}
+
 
 function refreshData(id=0){
      if (id==0) id = w2ui.sidebar.selected

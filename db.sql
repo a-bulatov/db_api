@@ -1518,7 +1518,7 @@ $$;
 create function data.sheet_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_get__2026_06_29$
+AS $data_sheet_get__2026_07_02$
 declare
    v_sheet record;
    v_ret jsonb;
@@ -1632,11 +1632,11 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 	   	)
 
 		 select jsonb_agg(jsonb_strip_nulls(
-		   jsonb_build_object('guid', x.guid, 'data', x.data, 'references', x.refs, 'class', x.class_guid)
+		   jsonb_build_object('guid', x.guid, 'data', x.data, 'references', x.refs, 'class', x.class_guid, 'npp', x.npp)
 		 ))
 		 into v_ret
 		 from (
-		 select r.guid,
+		 select r.guid, row_number() over(order by r.id) npp,
 		   jsonb_object_agg(atr.name,
 		   case
 			   when dt.key='E' then to_jsonb(enm.name)
@@ -1695,7 +1695,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 		  left join  meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
 		  left join  meta.class cla on cla.id = r.class_id
 		  where v.id = v_sheet.version_id and atr."name" = any(v_sheet.fields)
-		  group by r.guid, fltr.npp, cla.guid
+		  group by r.guid, fltr.npp, cla.guid, r.id
 		  order by fltr.npp
 		 ) x;
    elseif v_sheet.entity_type='RVT' then
@@ -1704,6 +1704,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 		into v_ret
 		from (select jsonb_strip_nulls(
 		  	    jsonb_build_object(
+				    'npp', row_number() over(order by r.id),   
                     'guid', r.guid,
                     'class', cla.guid,
                     'version_guid', v.guid,
@@ -1732,18 +1733,19 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
-$data_sheet_get__2026_06_29$;
+$data_sheet_get__2026_07_02$;
 
 create function data.filter_query_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_filter_query_get__2026_06_30$
+AS $data_filter_query_get__2026_07_02$
 declare
   	v_query text;
   	v_sheet record;
 	v_tmp text;
 	n_tmp text;
 	v_q jsonb;
+	v_cnt bigint;
 begin
   	select e.id, e.entity_type,
 	(select array_to_json(array_agg(jsonb_build_object(
@@ -1765,18 +1767,18 @@ begin
 		return jsonb_build_object('error', format('Таблица %s не найдена', f_params->>'guid'));
 	end if;
 								  
-	v_query = data.sheet_get(((f_params - 'filter')-'order')||jsonb_build_object('debug','true'))->>'query';
+	v_query = data.sheet_get(((f_params - 'filter')-'order'-'limit'-'offset')||jsonb_build_object('debug','true'))->>'query';
 								  
 	v_query = format($q$select t."PK_GUID", row_number() over() npp
 	from (%s) t
 	where true
 $q$, v_query);
 
-	if jsonb_typeof(f_params->'filter')='object' and (f_params->'filter') & '' then
+	if jsonb_typeof(f_params->'filter')='object' and (f_params->'filter') ? '' then
 		/* старый вариант со знаком операции в отдельном поле (для совместимости)*/
 		select x.key
 		into n_tmp
-		from json_each_text(f_params->'filter') x
+		from jsonb_each_text(f_params->'filter') x
 		where x.key!='';
 		
 		v_q = (select x.value
@@ -1784,64 +1786,127 @@ $q$, v_query);
 		 where (x.value->>'name') = n_tmp)||jsonb_build_object(
 		  'value', (f_params->'filter'->>'')||(f_params->'filter'->>n_tmp)
 		 );
+		 v_q = data.filter_part_get(v_q);
+		 if v_q ? 'error' then
+		 	return v_q;
+		 end if;
+		v_query = v_query||' and '||(v_q->>'expr');
 
 	elseif jsonb_typeof(f_params->'filter')='object' then
-		/* фильтр, где ключ - поле, а значение знак операции и значение для сравнения. связь and */				 
+		/* фильтр, где ключ - поле, а значение знак операции и значение для сравнения. связь and */
 		for n_tmp, v_tmp in 
-			select x.key, x.value from json_each_text(f_params->'filter') x
+			select x.key, x.value from jsonb_each_text(f_params->'filter') x
 		loop
 		   v_q = (select x.value
 			 from jsonb_array_elements(v_sheet.fields) x
 			 where (x.value->>'name') = n_tmp)||jsonb_build_object(
 			  'value', v_tmp
 			 );
+		   v_q = data.filter_part_get(v_q);
+		   if v_q ? 'error' then
+			  return v_q;
+		   end if;
+		   v_query = v_query||' and '||(v_q->>'expr');
 		end loop;
 	elseif jsonb_typeof(f_params->'filter')='array' then
-		/* массив из объектов как выше, связанных по or  */				 
+		/* массив из объектов как выше, связанных по or  */	
+		v_query = v_query||'and (';
 		for v_q in
 			select jsonb_array_elements(f_params->'filter')
 		loop
+		   if right(v_query, 2)!=' (' then
+				v_query = v_query||' or';	
+		   end if; 	
 		   if v_q ? '' then
 		   		v_tmp = v_q ->> '';
 				
 				select x.key
 				into n_tmp
-				from json_each_text(v_tmp) x
+				from jsonb_each_text(v_q) x
 				where x.key!='';
 				
 				v_q = (select x.value
 				 from jsonb_array_elements(v_sheet.fields) x
 				 where (x.value->>'name') = n_tmp)||jsonb_build_object(
-				  'value', (f_params->'filter'->>'')||(f_params->'filter'->>n_tmp)
+				  'value', v_tmp||(v_q->>n_tmp)
 				 );
-		   else				   		
-				v_query = v_query||' or(';
-				
+				v_q = data.filter_part_get(v_q);
+			   	if v_q ? 'error' then
+				  return v_q;
+			   	end if;
+				if right(v_query, 2)!=' (' then
+					v_query = v_query||' or ';	
+				end if;
+				v_query = v_query||(v_q->>'expr');
+		   else				   					
 				/* пробег по объекту со связкой and */
+				v_query = v_query||' (';
 				for n_tmp, v_tmp in 
-					select x.key, x.value from json_each_text(v_q) x
+					select x.key, x.value from jsonb_each_text(v_q) x
 				loop
 				   v_q = (select x.value
 					 from jsonb_array_elements(v_sheet.fields) x
 					 where (x.value->>'name') = n_tmp)||jsonb_build_object(
 					  'value', v_tmp
 					 );
-					 
+				   v_q = data.filter_part_get(v_q);
+				   if v_q ? 'error' then
+					return v_q;
+				   end if;
+				   if right(v_query, 2)!=' (' then
+					  v_query = v_query||' and ';	
+				   end if;
+				   v_query = v_query||(v_q->>'expr');
 				end loop;				
 				v_query = v_query||')';
 		   end if;
 		end loop;
+		v_query = v_query||')';
 	else
 		v_query = v_query||format($q$and PK_GUID='%s'::uuid$q$, f_params->'filter');
 	end if;
-	return jsonb_build_object('query', v_query);
+	
+	if (f_params->>'offset')::bigint < 0 then
+		v_tmp = $q$select count(*) from (
+		$q$||v_query||') x';
+		execute v_tmp into v_cnt;
+		f_params = f_params||jsonb_build_object('offset', v_cnt + (f_params->>'offset')::bigint);
+	end if;
+		  		  
+	if f_params ? 'order' then
+		v_query = v_query||$q$
+order by $q$;
+		for v_tmp, n_tmp in
+			select key, value->>key "value"
+			  from (
+			  select row_number() over () n, (select jsonb_object_keys(x0.value)) as key, x0.value
+			  from jsonb_array_elements(f_params->'order') x0) x
+			order by x.n
+		loop
+			if not right(v_query, 6)='er by ' then
+				v_query = v_query||', ';
+			end if;
+			v_query = v_query||quote_ident(v_tmp);
+			if upper(trim(n_tmp))='DESC' then
+				v_query = v_query||' desc';
+			end if;
+		end loop;
+	end if;
+	
+	if (f_params->>'offset')::bigint > 0 then
+		v_query = v_query||' offset '||(f_params->>'offset');
+	end if;
+	if (f_params->>'limit')::bigint >= 0 then
+		v_query = v_query||' limit '||(f_params->>'limit');
+	end if;
+	return jsonb_build_object('query', v_query, 'count', v_cnt);
 end
-$data_filter_query_get__2026_06_30$;
+$data_filter_query_get__2026_07_02$;
 
 create function data.filter_part_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_filter_part_get__2026_06_30$
+AS $data_filter_part_get__2026_07_02$
 declare
 	val varchar;
 	up_val varchar;
@@ -1893,12 +1958,12 @@ begin
 	elseif op is Null then
 		op = '=';
 	end if;
-	
+
 	if (f_params->>'type')='M' then
 		return jsonb_build_object('error', 'Операторы не поддерживаются для множественных ссылок');
 	elseif op in ('!~', '~') and (f_params->>'type') not in ('S','J') then
 		return jsonb_build_object('error', 'Оператор применим только к строкам или json');
-	elseif position('%' in val)>0 and (f_params->>'type') = 'S' then
+	elseif op in ('!~', '~') and position('%' in val)=0 and (f_params->>'type') = 'S' then
 		val = '%'||val||'%';
 	elseif (f_params->>'type')='J' and op in ('<','<=') then
 		op = '<@';
@@ -1907,25 +1972,25 @@ begin
 	end if;
 	
 	if op='~' and (f_params->>'type')='J' then
-		return jsonb_build_object('expr', format('%s ? %L ', f_params->>'name', val));
+		return jsonb_build_object('expr', format('%s ? %L ', quote_ident(f_params->>'name'), val));
 	elseif op='!~' and (f_params->>'type')='J' then
-		return jsonb_build_object('expr', format('not(%s ? %L) ', f_params->>'name', val));
+		return jsonb_build_object('expr', format('not(%s ? %L) ', quote_ident(f_params->>'name'), val));
 	elseif op='~' then
-		return jsonb_build_object('expr', format('%s ilike %L ', f_params->>'name', val));
+		return jsonb_build_object('expr', format('%s ilike %L ', quote_ident(f_params->>'name'), val));
 	elseif op='!~' then
-		return jsonb_build_object('expr', format('%s not ilike %L ', f_params->>'name', val));	
+		return jsonb_build_object('expr', format('%s not ilike %L ', quote_ident(f_params->>'name'), val));	
 	elseif (f_params->>'type') in ('J','S','T') then
-		return jsonb_build_object('expr', format('%s %s %L ', f_params->>'name', op, val));
-	elseif (f_params->>'type') = 'G' then
+		return jsonb_build_object('expr', format('%s %s %L ', quote_ident(f_params->>'name'), op, val));
+	elseif (f_params->>'type') in ('G','R') then
 		if op not in ('=', '!=') then
-			return jsonb_build_object('error', 'Для uuid допустимы только = и != ');
+			return jsonb_build_object('error', format('Для %s допустимы только = и != ',f_params->>'name'));
 		end if;
-		return jsonb_build_object('expr', format('%s %s %L::uuid ', f_params->>'name', op, val));
+		return jsonb_build_object('expr', format('%s %s %L::uuid ', quote_ident(f_params->>'name'), op, val));
 	elseif op is null then
-		return jsonb_build_object('expr', format('%s = %s ', f_params->>'name', val));
+		return jsonb_build_object('expr', format('%s = %s ', quote_ident(f_params->>'name'), val));
 	else
-		return jsonb_build_object('expr', format('%s %s %s ', f_params->>'name', op, val));
+		return jsonb_build_object('expr', format('%s %s %s ', quote_ident(f_params->>'name'), op, val));
 	end if;
 
 end
-$data_filter_part_get__2026_06_30$;
+$data_filter_part_get__2026_07_02$;
