@@ -29,7 +29,7 @@ def page_replaces(content):
     return content
 
 
-def check_json(text: str) -> str | None:
+def check_json(text: str):
     """
     Проверяет синтаксис JSON.
     Возвращает None если ошибок нет, иначе — описание ошибки на русском.
@@ -75,10 +75,14 @@ def check_json(text: str) -> str | None:
                 "ожидается объект или массив",
         }.get(e.msg, None)
 
-        if msg is not None:
-            return f"Строка {line}, позиция {col}: {msg}{context}"
+        if msg is None:
+            msg = "ошибка синтаксиса JSON"
 
-        return f"Строка {line}, позиция {col}: ошибка синтаксиса JSON{context}"
+        return {
+            "message":f"Строка {line}, позиция {col}: {msg}{context}",
+            "line": line,
+            "col": col
+        }
 
 
 class StaticFiles:
@@ -112,9 +116,6 @@ async def home_page(request):
     x = html("web/api.html")
     return HTMLResponse(x)
 
-async def test_page(request):
-    x = html("web/merm.html")
-    return HTMLResponse(x)
 
 async def db_page(request):
     if request.method=="POST": # запрос на выполнение команды в базе данных
@@ -169,7 +170,6 @@ def admin_routes(url_prefix:str="", use_db=True) -> list[Route]:
     register_rpc(json_syntax_check)
     ret = [
         Route(url_prefix+"/", endpoint=home_page),
-        Route(url_prefix+"/test", endpoint=test_page),
         Route(url_prefix+"/codemirror/{path:path}", endpoint=StaticFiles("web/lib/codemirror.zip")),
         Route(url_prefix+"/mermaid/{path:path}", endpoint=StaticFiles("web/lib/mermaid.zip")),
         Route(url_prefix+"/web_ui/{path:path}", endpoint=StaticFiles("web/lib/web2ui.zip")),

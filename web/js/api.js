@@ -43,7 +43,7 @@ function getParams(){
         }).then(response => response.json())
         .then(result => {
            let out = document.getElementById("finite-output")
-           out.innerHTML = `<pre>${result.result}</pre>`
+           out.innerHTML = `<pre>${result.result.message}</pre>`
         })
         .catch(error => console.error('Error:', error))
         throw new Error("Ошибка в JSON")

@@ -1,5 +1,6 @@
 const pstyle = 'border: 1px solid #efefef; padding: 5px'
 const lineMarks = []
+let debug_id = 0
 document.addEventListener('mousemove', function(e) { window._lastMouse = e })
 const editor_conf = {
        //theme: 'idea',
@@ -110,7 +111,7 @@ new w2toolbar({
                 table.style.height=(pv.height - 50).toString() + "px"
                 break
             case ('close') :
-                w2ui.layout.hide('preview')
+                stopDebug()
                 break
         }
     }
@@ -291,7 +292,12 @@ document.addEventListener('dragstart', function(e) {
 })
 
 function fieldPopup(text, title="Значение:") {
-    text = String(text)
+
+    // try {
+    //    text = JSON.stringify(text, null, 4)
+    //} catch(err) {
+        text = String(text)
+    //}
 
     text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"')
 
@@ -637,6 +643,18 @@ function startDebug(){
     w2ui.result_grid.records = [{"key":"","value":""}]
     w2ui.layout.show("preview")
     w2ui.result_grid.render("#previewTable")
+    debug_id = 1
+}
+
+function stopDebug() {
+    w2ui.layout.hide('preview')
+    if(debug_id == 0) return
+    w2ui.layout.showTabs('main')
+    w2ui.layout.show("left")
+    window.info_editor.setOption('readOnly', false)
+    let start_dbg = document.getElementById("funcExts")
+    start_dbg.style.display = 'block'
+    debug_id == 0
 }
 
 //----------------------------------------------------------------------------------------

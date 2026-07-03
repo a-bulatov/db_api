@@ -1012,7 +1012,7 @@ $data_value_check__2026_06_25$;
 create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set__2026_06_26$
+AS $data_sheet_set__2026_07_03$
 declare
    v_sheet record;
    v_counters record;
@@ -1210,7 +1210,7 @@ begin
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end;
-$data_sheet_set__2026_06_26$;
+$data_sheet_set__2026_07_03$;
 
 
 create function data.sheet_set_rvt(f_params jsonb)
@@ -1359,12 +1359,13 @@ $data_sheet_set_rvt__2026_06_25$;
 create function data.filter(f_version_id bigint, f_params jsonb)
  RETURNS TABLE(id bigint, npp integer, mac smallint[])
  LANGUAGE plpgsql
-AS $data_filter__2026_06_25$
+AS $data_filter__2026_07_03$
 declare
    v_query text = '';
    v_limits text;
    v_version record;
    chk_mac text = 'true';
+   v_js jsonb;
 begin
    select v.id, v.entity_id
    into v_version
@@ -1415,21 +1416,33 @@ begin
 			inner join data.row t on t.guid = x.guid 
 			where %s 
 		$q$, (f_params->>'filter'), chk_mac);
+   else
+   		v_js = data.filter_query_get(f_params);
+		if v_js ? 'error' then
+			raise exception '%', v_query ->> 'error';
+		end if;
+		v_query = v_js->>'query';
+		v_query = format($q$select r.id, x.npp::integer, null::smallint[] mac
+		from(%s) x
+		inner join data.row r on r.guid = x."PK_GUID"
+		$q$, v_query);
    end if;
 
    return query execute v_query;
 end
-$data_filter__2026_06_25$;
+$data_filter__2026_07_03$;
 
 
 create function data.filter_rvt(f_version_id bigint, f_params jsonb)
  RETURNS TABLE(id bigint, npp integer, mac smallint[])
  LANGUAGE plpgsql
-AS $data_filter_rvt__2026_06_25$
+AS $data_filter_rvt__2026_07_03$
 declare
    v_query text = '';
    v_limits text;
    v_version record;
+   v_js jsonb;
+   chk_mac text = 'true';
 begin
    select v.id, v.entity_id
    into v_version
@@ -1445,6 +1458,14 @@ begin
       then ''
       else ' offset '||((f_params->>'offset')::int)::varchar
    end;
+   
+   if coalesce((f_params->>'current_mac_only')::boolean, false) then
+   		begin
+   			chk_mac = 't.maclabel::varchar = '''||(select current_setting('ac_session_maclabel')::varchar)||'''';
+		exception when others then
+			chk_mac = 'true';
+		end;
+   end if;
 
    if (f_params->>'filter') is null and (f_params->>'order') is null then
         v_query = format($q$
@@ -1459,24 +1480,34 @@ begin
 		$q$, v_version.entity_id, v_version.id, v_limits);
    elseif (f_params->>'filter') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
         v_query = format($q$
-			select x.id, 1::integer npp, null::smallint[] mac
-			from data.row x where x.guid=%L::uuid
+			select r.id, 1::integer npp, null::smallint[] mac
+			from data.row r where r.guid=%L::uuid
 		$q$, f_params->>'filter');
    elseif jsonb_typeof(f_params->'filter') = 'array' and (f_params->'filter'->>0)~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
 		v_query = format($q$
-			select t.id, x.npp::integer, null::smallint[] mac 
+			select r.id, x.npp::integer, null::smallint[] mac 
 			from (
 			  select x.value::uuid guid, row_number() over () as npp
 			  from jsonb_array_elements_text(%L::jsonb) x
 			) x
-			inner join data.row t on t.guid = x.guid 
+			inner join data.row r on r.guid = x.guid 
 			where %s 
 			$q$, (f_params->>'filter'), chk_mac);
+   else
+   		v_js = data.filter_query_get(f_params);
+		if v_js ? 'error' then
+			raise exception '%', v_query ->> 'error';
+		end if;
+		v_query = v_js->>'query';
+		v_query = format($q$select r.id, x.npp::integer, null::smallint[] mac
+		from(%s) x
+		inner join data.row r on r.guid = x."PK_GUID"
+		$q$, v_query);
    end if;
 
    return query execute v_query;
 end
-$data_filter_rvt__2026_06_25$;
+$data_filter_rvt__2026_07_03$;
 
 
 create function data.ref_vals(f_version_id bigint)
@@ -1518,7 +1549,7 @@ $$;
 create function data.sheet_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_get__2026_07_02$
+AS $data_sheet_get__2026_07_03$
 declare
    v_sheet record;
    v_ret jsonb;
@@ -1556,13 +1587,17 @@ begin
    if not(f_params ? 'fields') is not null then
    		f_params = f_params||jsonb_build_object('fields', (array_to_json(v_sheet.fields)::jsonb));
    end if;
+   
+   if not(f_params ? 'version_guid') and v_sheet.version_guid is not Null then
+   		f_params = f_params||jsonb_build_object('version_guid', v_sheet.version_guid);
+   end if;
 
    if v_sheet.id is Null then
         return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
    elseif coalesce((f_params->>'debug')::boolean, false) then
    		/* получить  запрос для возврата данных в виде обычной таблицы */
 		f_params = f_params - 'debug';
-		t_tmp = 'select (tbl.value->>''guid'')::uuid "PK_GUID" ';
+		t_tmp = 'select (tbl.value->>''guid'')::uuid "PK_GUID", (tbl.value->>''npp'')::bigint "ROW_NUMBER" ';
 		for tmp_rec in
 			select a."name", t."key" tp_key, t.eav_field
 			from meta.attribute a
@@ -1733,12 +1768,13 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
-$data_sheet_get__2026_07_02$;
+$data_sheet_get__2026_07_03$;
+
 
 create function data.filter_query_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_filter_query_get__2026_07_02$
+AS $data_filter_query_get__2026_07_03$
 declare
   	v_query text;
   	v_sheet record;
@@ -1891,7 +1927,9 @@ order by $q$;
 				v_query = v_query||' desc';
 			end if;
 		end loop;
-	end if;
+	elseif (f_params->>'offset')::bigint > 0 or (f_params->>'limit')::bigint >= 0 then
+		v_query = v_query||' order by t."ROW_NUMBER"'; 
+	end if; 
 	
 	if (f_params->>'offset')::bigint > 0 then
 		v_query = v_query||' offset '||(f_params->>'offset');
@@ -1901,7 +1939,7 @@ order by $q$;
 	end if;
 	return jsonb_build_object('query', v_query, 'count', v_cnt);
 end
-$data_filter_query_get__2026_07_02$;
+$data_filter_query_get__2026_07_03$;
 
 create function data.filter_part_get(f_params jsonb)
  RETURNS jsonb
