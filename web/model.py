@@ -38,15 +38,18 @@ async def db_model(area):
         ),
 
         links as (
-          select distinct t1.table_name table_from, t2.table_name table_to
-          from pg_catalog.pg_constraint cons
-          inner join tables t1 on t1.oid = cons.conrelid
-          inner join tables t2 on t2.oid = cons.confrelid
+          select distinct x.table_from, x.table_to, x.col
+            from(
+            select  t1.table_name table_from, t2.table_name table_to , t1.fields->(cons.conkey[1]-1)->>'name' col
+                      from pg_catalog.pg_constraint cons
+                      inner join tables t1 on t1.oid = cons.conrelid
+                      inner join tables t2 on t2.oid = cons.confrelid
+            ) x
         )
         
         select jsonb_build_object(
             'tables',(select jsonb_agg(jsonb_build_object('table', table_name,'fields', fields)) from tables),
-            'links',(select jsonb_agg(jsonb_build_object('from', table_from, 'to', table_to)) from links)
+            'links',(select jsonb_agg(jsonb_build_object('from', table_from, 'to', table_to, 'col', col)) from links)
         )""", shemas, JSON)
 
     mermaid = """erDiagram    
@@ -75,7 +78,7 @@ async def db_model(area):
             t = f["type"]
             t = t.replace("character varying", "varchar").replace("timestamp without time zone","timestamp_wotz").replace("timestamp with time zone","timestamp_wtz")
             t = t.replace("double precision","float")
-            t += " " + f["name"].replace(" ","_")
+            t = f["name"].replace(" ","_") + " " + t
             if f["idx_flag"]:
                 t += " "
                 if "K" in f["idx_flag"]:
@@ -89,7 +92,7 @@ async def db_model(area):
             mermaid += f'        {t}\n'
         mermaid += "\n    }\n"
     for x in shemas["links"]:
-        mermaid += f'    {x["from"]} |o--o{{ {x["to"]}:.\n'
+        mermaid += f'    {x["from"]} }}o--o| {x["to"]}:{x["col"]}\n'
     return f"""<html>
   <body>
     <pre class="mermaid">{ mermaid }

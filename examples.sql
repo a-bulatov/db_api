@@ -69,8 +69,8 @@ select meta.sheet_set('{"title":"Сопроводительная докумен
 "guid":"00000000-0000-0000-0000-000000000005",
 "entity_type":"RVT",
 "columns":[
-    {"name": "title_short", 	"type": "S", "title":"Краткое наименование"},
-    {"name": "title", 	"type": "S", "title":"Наименование"},
+    {"name": "title_short", "type": "S", "title":"Краткое наименование", "is_unique": true},
+    {"name": "title", "type": "S", "title":"Наименование"},
     {"name": "ref_id","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
 ]}')
 

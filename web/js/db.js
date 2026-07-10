@@ -553,10 +553,10 @@ function multiQuery(id) {
                 }
                 break
             case "error":
-               notify.innerHTML += '<p style="color: red;">ERROR</p>' + data.val + '<hr><br>'
+               notify.innerHTML += '<p style="color: red;">Завершено с ошибкой</p><br><hr>'+ notify.innerHTML+'<p style="color: red;">ERROR</p>' + data.val + '<hr><br>'
                break
             case "end":
-               notify.innerHTML += 'Выполнение завершено!'
+               notify.innerHTML = '<p style="color: green;">Выполнение успешно завершено! <br><hr></p>' + notify.innerHTML
                break
         }
     };

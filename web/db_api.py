@@ -12,6 +12,7 @@ from .restore_struct import DB_Restore
 from yaml import safe_dump as yaml_dump, safe_load as yaml_load
 from io import StringIO
 from re import search
+from .pl_debug import PlDebuger
 
 F_CHK = "noitcnuf e"
 _VER = None
@@ -219,7 +220,8 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         ret = await env.sql("""select x.nspname "schema", array_to_json(array_agg(x.defs)) "defs"
         from (
         select p.proname ||' (' || pg_get_function_arguments(p.oid) ||') -> '||t.typname||
-            case when  d.description is null then '' else ' -- '||(string_to_array(d.description, chr(10))::varchar[])[1] end defs,
+            case when  d.description is null then '' else ' -- '||(string_to_array(d.description, chr(10))::varchar[])[1] end||
+            '   [ '||p.oid::varchar||' ]' defs,
             n.nspname 
         from pg_catalog.pg_proc p
         inner join pg_catalog.pg_namespace n on p.pronamespace = n.oid
@@ -361,8 +363,8 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
             # Обычные таблицы
             ret += await self.create_table_scripts(env, id)
         ret+=f"""\n/*
-drop table {t['t']} cascede; -- для удаленния таблицы со всеми зависимостями\n
-truncate table {t['t']} cascede; -- для очистки данных таблицы со всеми зависимостями\n"""
+drop table {t['t']} cascade; -- для удаленния таблицы со всеми зависимостями\n
+truncate table {t['t']} cascade; -- для очистки данных таблицы со всеми зависимостями\n"""
 
         d = await env.sql("""select array_agg('    '||ns.nspname||'.'||cl1.relname)
         from pg_catalog.pg_constraint co
@@ -592,3 +594,19 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
         if db=="":
             db = "/* Отличий не найдено */"
         return db
+
+    async def do_debug(self, env, fn_id=None, dbg_id=None, op="new", **kwargs):
+        if op=="new" and dbg_id is None:
+            dbg = PlDebuger(fn_id)
+            return dbg.id
+        dbg = PlDebuger.worker(dbg_id)
+        if dbg is None :
+            return {"error":"Сеанс не найдён"}
+        match(op.lower()):
+            case "params":
+                x = await dbg.params()
+                return x
+            case "stop":
+                await dbg.stop()
+                return {}
+        return {"error":"Неизвестная операция"}

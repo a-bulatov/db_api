@@ -15,10 +15,11 @@ class PlDebuger:
 
     def __init__(self, proc_oid:int):
         self.created_at=datetime.now()
-        self._oid =proc_oid
+        self._oid = proc_oid
+        self._listener = None
 
     @property
-    def id(self):
+    def id(self)->int:
         return int(id(self))
 
     async def param_list(self):
@@ -34,3 +35,16 @@ class PlDebuger:
                 ))) t_id on t_id.npp = x.npp
                 inner join pg_catalog.pg_type t on t.oid = t_id.oid""", self._oid, OBJECT)
         return params
+
+    async def start(self, params):
+        async with DB_ENV() as env:
+            self._listener = await env.sql("select pldbg_create_listener()", ONE)
+            # установка точки останова на начало (-1)
+            await env.sql("select  pldbg_set_global_breakpoint($1, $2, -1, NULL)", self._listener, self._oid)
+        # в отдельной транзакции запустить саму функцию
+        return 0
+
+    async def stop(self):
+        async with DB_ENV() as env:
+            await env.sql("select pldbg_abort_target($1)", self._listener, ONE)
+        return 0
