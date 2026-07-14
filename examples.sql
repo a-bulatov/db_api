@@ -1,8 +1,8 @@
 select meta.sheet_set('{"title":"test",
 "guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7",
 "columns":[
-    {"name": "id", 	"type": "I"},
-    {"name": "name","type": "S"},
+    {"name": "id", 	"type": "I", "is_unique": true},
+    {"name": "name","type": "S", "is_unique": true},
     {"name": "flag","type": "B"}
 ]}')
 
@@ -38,7 +38,7 @@ select data.sheet_set('{"guid":"631d0a40-3d8d-407e-bd43-d0675fede9fb",
 ]}')
 
 select meta.sheet_set('{"title":"multi refs",
-"guid":"6ed9a6ea-af93-47ee-bf43-937304e2f663",
+"guid":"6ed9a6ea-af93-47ee-bf43-937304e2f663", `
 "columns":[
     {"name": "id", 	"type": "I"},
     {"name": "ref","type": "M", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
@@ -80,3 +80,41 @@ select data.sheet_set('{
 {"guid":"41aa5e88-09a4-4a93-a159-4e4faf48f3db","data":{"title_short":"Краткое","title":"Полное"}},
 {"guid":"21beb85f-120c-48b0-a5e9-a52580757b54","data":{"title_short":"док2","title":"Второй документ","ref_id":"75e8989f-8d03-429e-9233-0e6117880715"}}
 ]}')
+
+
+drop schema  if exists demo;
+
+create schema demo;
+
+-- Создание таблицы пользователей
+CREATE TABLE demo.users (
+   user_id SERIAL PRIMARY KEY,
+   username VARCHAR(50) NOT NULL UNIQUE,
+   email VARCHAR(100) NOT NULL UNIQUE,
+   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Создание таблицы товаров
+CREATE TABLE demo.products (
+   product_id SERIAL PRIMARY KEY,
+   name VARCHAR(100) NOT NULL,
+   price NUMERIC(10, 2) NOT NULL CHECK (price >= 0),
+   stock_quantity INTEGER NOT NULL DEFAULT 0
+);
+
+-- Создание таблицы заказов
+CREATE TABLE demo.orders (
+   order_id SERIAL PRIMARY KEY,
+   user_id INTEGER REFERENCES demo.users(user_id) ON DELETE CASCADE,
+   order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+   total_amount NUMERIC(10, 2) DEFAULT 0.00
+);
+
+-- Создание таблицы связи "многие ко многим" (товары в заказе)
+CREATE TABLE demo.order_items (
+   order_item_id SERIAL PRIMARY KEY,
+   order_id INTEGER REFERENCES demo.orders(order_id) ON DELETE CASCADE,
+   product_id INTEGER REFERENCES demo.products(product_id) ON DELETE RESTRICT,
+   quantity INTEGER NOT NULL CHECK (quantity > 0),
+   price_at_moment NUMERIC(10, 2) NOT NULL
+);

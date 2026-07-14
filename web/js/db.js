@@ -1,6 +1,7 @@
 const pstyle = 'border: 1px solid #efefef; padding: 5px'
 const lineMarks = []
 let debug_id = 0
+let curtab = null
 document.addEventListener('mousemove', function(e) { window._lastMouse = e })
 const editor_conf = {
        //theme: 'idea',
@@ -28,34 +29,14 @@ new w2layout({
                  name: 'tabs',
                  active: 'info',
                  tabs: [
+                     { id: 'sb', text: '>' },
                      { id: 'info', text: 'Определение' },
                      { id: 'data', text: 'Данные' },
                      { id: 'console', text: 'Консоль' },
                  ],
                  onClick(event) {
                       clearMarks()
-                      let info = document.getElementById('infoEditor')
-                      let cons = document.getElementById('consoleEditor')
-                      let data = document.getElementById('dataGrid')
-                      let run_btn = document.getElementById('btnRun')
-                      info.style.display = 'none'
-                      cons.style.display = 'none'
-                      data.style.display = 'none'
-                      w2ui.layout.hide('preview')
-                      switch(event.target){
-                        case("info"):
-                           info.style.display = 'block'
-                           window.info_editor.refresh()
-                           break
-                        case("console"):
-                           cons.style.display = 'block'
-                           window.console_editor.refresh()
-                           break
-                        case("data"):
-                           refreshData()
-                           break
-                      }
-                      run_btn.disabled = event.target == "data"
+                      showTab(event.target)
                  }
             },
             html: `
@@ -184,6 +165,9 @@ new w2sidebar({
     <button class="w2ui-btn action"  onclick="runClick()" id="btnRun">
      <i class="fas fa-play"></i>
     </button>
+    <button class="right-rounded-button"  onclick="hideSidebar()">
+         <i class="fas fa-angle-double-left"></i>
+    </button>
     </div>`,
     name: 'sidebar',
     nodes: [],
@@ -291,16 +275,41 @@ document.addEventListener('dragstart', function(e) {
     }
 })
 
+function showTab(tab) {
+    let info = document.getElementById('infoEditor')
+    let cons = document.getElementById('consoleEditor')
+    let data = document.getElementById('dataGrid')
+    let run_btn = document.getElementById('btnRun')
+    info.style.display = 'none'
+    cons.style.display = 'none'
+    data.style.display = 'none'
+    w2ui.layout.hide('preview')
+    switch(tab){
+        case("sb"):
+           w2ui.layout.show("left")
+           let main = w2ui.layout.get('main')
+           main.tabs.hide("sb")
+           main.tabs.click(curtab)
+           break
+        case("info"):
+           info.style.display = 'block'
+           window.info_editor.refresh()
+           break
+        case("console"):
+           cons.style.display = 'block'
+           window.console_editor.refresh()
+           break
+        case("data"):
+           refreshData()
+           break
+    }
+    if(tab!="sb" && curtab!="") curtab = tab
+    run_btn.disabled = tab == "data"
+}
+
 function fieldPopup(text, title="Значение:") {
-
-    // try {
-    //    text = JSON.stringify(text, null, 4)
-    //} catch(err) {
-        text = String(text)
-    //}
-
+    text = String(text)
     text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"')
-
     w2popup.open({
         title: title,
         body: '<div style="padding:10px"><pre>' + text + '</pre></div>',
@@ -344,9 +353,14 @@ function getNodeInfo(id){
         body: JSON.stringify({"method": "db", "params":{"do": "get_info", "id": id}})
     }).then(response => response.json())
     .then(result => {
+        if("error" in result) {
+            refreshMeta()
+            return
+        }
         let tabs = w2ui.layout.get('main').tabs
         let fexts = document.getElementById('funcExts')
         window.info_editor.setValue(result.result)
+
         if(id.startsWith("fn.")) {
             fexts.style.display = 'block'
         } else {
@@ -359,6 +373,7 @@ function getNodeInfo(id){
     })
     .catch(error => console.error('Error:', error))
 }
+
 
 function loadScript() {
     fetch('/db', {
@@ -419,6 +434,7 @@ function clearMarks() {
 }
 
 function refreshMeta(){
+    if (curtab=="") return
     clearMarks()
     fetch('/db', {
       method: 'POST',
@@ -428,23 +444,18 @@ function refreshMeta(){
       body: JSON.stringify({"method": "db", "params":{"do": "get_db_objects"}})
     }).then(response => response.json())
     .then(result => {
-          let sel = null
           let sidebar= w2ui.sidebar
-          if (sidebar.nodes.length > 0 && sidebar.selected !== null) sel=sidebar.selected[0]
           let nodeIds = sidebar.nodes.map(n => n.id)
           sidebar.remove.apply(sidebar, nodeIds)
           result.result.sidebar.forEach((item)=>{
             sidebar.add(item)
           })
-          if (sel === null) sel = result.result.sidebar[0]["id"]
           sidebar.refresh()
-          sidebar.click(sel)
-
+          sidebar.click(sidebar.nodes[0].id)
           window.console_editor.setOption("hintOptions",{"tables":result.result.tables})
           window.info_editor.setOption("hintOptions",{"tables":result.result.tables})
-
           let tabs = w2ui.layout.get('main').tabs
-          if (tabs) tabs.click(tabs.active)
+          tabs.click("info")
     })
     .catch(error => console.error('Error:', error))
 }
@@ -553,7 +564,7 @@ function multiQuery(id) {
                 }
                 break
             case "error":
-               notify.innerHTML += '<p style="color: red;">Завершено с ошибкой</p><br><hr>'+ notify.innerHTML+'<p style="color: red;">ERROR</p>' + data.val + '<hr><br>'
+               notify.innerHTML = '<p style="color: red;">Завершено с ошибкой</p><br><hr>'+ notify.innerHTML+'<p style="color: red;">ERROR</p>' + data.val + '<hr><br>'
                break
             case "end":
                notify.innerHTML = '<p style="color: green;">Выполнение успешно завершено! <br><hr></p>' + notify.innerHTML
@@ -622,6 +633,12 @@ function openModel() {
 	window.open(`/db?model=${w2ui.sidebar.selected}`);
 }
 
+function hideSidebar() {
+    w2ui.layout.hide("left")
+    let main = w2ui.layout.get('main')
+    main.tabs.show("sb")
+}
+
 function startDebug(){
     w2ui.layout.hideTabs('main')
     w2ui.layout.hide("left")
@@ -684,6 +701,8 @@ window.onload = function() {
    setupDragDrop(window.console_editor)
 
    document.getElementById('patternFile').addEventListener('change', checkPattern)
+   let main = w2ui.layout.get('main')
+   main.tabs.hide("sb")
 
    refreshMeta()
 }

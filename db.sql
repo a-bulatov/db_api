@@ -251,6 +251,24 @@ create table "data"."row" (
 );
 
 
+create view meta.pg_table as (
+  with pt as (
+	select x.oid, x.t_name "name", (left(x.h1,8)||'-'||right(h1,4)||'-4321-ab'||left(x.h2,2)||'-'||right(x.h2,12))::uuid guid
+	from (
+	select c.oid::bigint, n.nspname||'.'||c.relname t_name, lpad(to_hex(hashtext(n.nspname::varchar)),12,'0') h1, rpad(to_hex(hashtext(c.relname)),14,'0') h2
+	from pg_catalog.pg_class c
+	inner join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+	where relkind='r'
+	) x
+  )
+
+  select pt.guid, pt.oid, pt.name, r.id
+  from pt
+  inner join meta.entity t on t.guid = uuid_nil()
+  left join data.row r on r.entity_id = t.id and r.guid = pt.guid
+  order by pt.name
+);
+
 create function meta.field_list(f_params jsonb)
   returns jsonb
   language plpgsql
@@ -324,7 +342,7 @@ $$;
 create function meta.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set__2026_07_10$
+AS $meta_sheet_set__2026_07_14$
 declare
     v_sheet record;
     v_column record;
@@ -335,6 +353,10 @@ begin
     if coalesce(f_params::varchar,'{}')='{}' then
         return jsonb_build_object('error', 'структура таблицы не задана');
     end if;
+	
+	if (f_params->>'entity_type')='PHYS' then
+		return meta.sheet_set_pg(f_params);
+	end if;
 
     v_force = coalesce((f_params ->> 'force')::boolean,false);
 
@@ -526,7 +548,7 @@ begin
         where e.id = v_sheet.id
     );
 end;
-$meta_sheet_set__2026_07_10$;
+$meta_sheet_set__2026_07_14$;
 
 
 create function meta.sheet_get(f_params jsonb)
@@ -959,7 +981,7 @@ $data_version_get_value__2026_06_26$;
 create or replace function data.value_check(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_value_check__2026_07_10$
+AS $data_value_check__2026_07_13$
 declare
  fld_def record;
  tmp_rec record;
@@ -992,19 +1014,19 @@ begin
   }
   */
 
-
-
   select
   		(f_params->>'value') "value",
   		(f_params->>'column_id')::bigint id,
-		coalesce((f_params->>'column_name'),'') "name",
+		coalesce((f_params->>'name'),'') "name",
 		coalesce((f_params->>'is_unique')::boolean, false) is_unique,
 		coalesce((f_params->>'is_nullable')::boolean, true) is_nullable,
 		(f_params->>'row_id')::bigint row_id,
 		(f_params->>'type') "type",
 		(f_params->>'referencе') "referencе",
 		(f_params->>'ref_attribute') "ref_attribute",
-		(f_params->>'entity_id')::bigint entity_id
+		(f_params->>'entity_id')::bigint entity_id,
+		(f_params->>'version_id')::bigint version_id,
+		(f_params->>'entity_type') entity_type
   into fld_def;
 
 
@@ -1020,27 +1042,42 @@ begin
 	end if;
   end if;
   
-  if fld_def.is_unique and fld_def.row_id is not null then
-  	if fld_def.id is null then
-		return jsonb_build_object('error', 'Не определен Id атрибута [при проверке значения]');
-	end if;
-	begin
+  if fld_def.is_unique and fld_def.id is null then
+	 return jsonb_build_object('error', 'Не определен Id атрибута [при проверке значения]');
+  end if;
+
+  begin
+	if fld_def.is_unique and fld_def.row_id is not null and fld_def.entity_type='RVT' then
 		insert into data.uk_entity (
 			row_id,
 			atr_id,
 			"value" 
 		) values (
-		  	fld_def.row_id, 
-		  	fld_def.id, 
-		  	fld_def.value
+			fld_def.row_id, 
+			fld_def.id, 
+			fld_def.value
 		)
 		on conflict(row_id, atr_id) do
 		update set value = excluded.value;
-	exception
-  	when others then
-		return jsonb_build_object('error', format('Значение %s нарушает уникальность значений атрибута %s [при проверке значения]', f_params->>'value', fld_def.name));
-	end;
-  end if;
+	elseif fld_def.is_unique and fld_def.row_id is not null and fld_def.entity_type in ('VER','EAV') then
+		insert into data.uk_version(
+		  	version_id,
+			row_id,
+			atr_id,
+			"value" 
+		) values (
+		  	fld_def.version_id,
+			fld_def.row_id, 
+			fld_def.id, 
+			fld_def.value
+		)
+		on conflict(version_id, row_id, atr_id) do
+		update set value = excluded.value;
+	end if;
+  exception
+  when others then
+	  return jsonb_build_object('error', format('Значение %s нарушает уникальность значений атрибута %s [при проверке значения]', fld_def.value, fld_def.name));
+  end;
 
   if fld_def.type in ('R','M','r','H') then
   	if fld_def.type = 'M' and jsonb_typeof(f_params->'value')!='array' then
@@ -1086,12 +1123,12 @@ begin
 
   return ret||jsonb_build_object('type', fld_def.type);
 end
-$data_value_check__2026_07_10$;
+$data_value_check__2026_07_13$;
 
 create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set__2026_07_03$
+AS $data_sheet_set__2026_07_13$
 declare
    v_sheet record;
    v_counters record;
@@ -1163,19 +1200,31 @@ begin
             dat.value,
             (dea.id is NUll) new_attr,
             col.ref_attribute_id,
-            ra_col.entity_id ref_entity_id
+			col.name col_name,
+            ra_col.entity_id ref_entity_id,
+			ra_col.name ref_attribute,
+			case when dt.key='E'
+				then col.ref_enum_key
+				else re.guid::varchar
+			end reference,
+			nn.id is null as is_nullable,
+			uk.id is not null as is_unique
         from (
             select coalesce((x.value->>'guid')::uuid, uuid_generate_v4()) guid,
                    (x.value->'data') "data",
                    (x.value->>'delete')::boolean to_delete
             from jsonb_array_elements(f_params->'rows') x
         ) rows
+		inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
         left join jsonb_each_text(rows.data) dat on true
         left join data.row db_rows on db_rows.guid = rows.guid and db_rows.entity_id = v_sheet.id
         left join meta.attribute col on col.entity_id = v_sheet.id and col.name = dat.key
         left join meta.attribute ra_col on ra_col.id = col.ref_attribute_Id
+		left join meta.entity re on re.id = ra_col.entity_id
         left join meta.data_type dt on dt.id = col.type_id
         left join data.eav dea on dea.version_id=v_sheet.version_id and dea.id=db_rows.id and dea.attribute_id=col.id
+		left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(col.flags) and nn.key = 'NN'
+		left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(col.flags) and uk.key = 'UQ'
    loop
         if v_row.guid != tmp_row_guid then
             tmp_row_guid = v_row.guid;
@@ -1201,10 +1250,6 @@ begin
 		
 		if v_row.type_code = 'r' then
 			continue;
-        elseif v_row.type_code = 'B' then
-            v_row.value = case when upper(v_row.value) in ('TRUE','ДА','YES','Y','1','T','Д') then '1' else '0' end;
-        elseif v_row.type_code = 'G' then
-            v_row.value = (v_row.value::uuid)::varchar;
         elseif v_row.type_code = ('R') then
             tmp_value = null;
             select r.id::varchar into tmp_value
@@ -1248,8 +1293,28 @@ begin
             else
                 v_row.value = tmp_rec.val;
             end if;
-        elseif v_row.type_code = 'r' then
-            continue;
+        else
+			tmp_ret = data.value_check(jsonb_build_object(
+              'type', v_row.type_code,
+              'value', v_row.value,
+              'referencе', v_row.reference,
+			  'ref_attribute', v_row.ref_attribute,
+              'is_unique', v_row.is_unique,
+              'is_nullable', v_row.is_nullable,
+              'guid', v_sheet.guid,
+              'column_id', v_row.attribute_id,
+			  'name', v_row.col_name,
+			  'entity_id', v_sheet.id,
+			  'entity_type', v_sheet.entity_type,
+			  'row_id', tmp_row_id,
+			  'version_id', v_sheet.version_id
+            ));
+
+            if (tmp_ret->>'error') is not null then
+                return jsonb_build_object('error', tmp_ret->>'error');
+			else
+				v_row.value = tmp_ret->>'value';
+            end if;  
         end if;
 
         if v_row.new_attr then
@@ -1289,13 +1354,13 @@ begin
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end;
-$data_sheet_set__2026_07_03$;
+$data_sheet_set__2026_07_13$;
 
 
 create function data.sheet_set_rvt(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set_rvt__2026_07_10$
+AS $data_sheet_set_rvt__2026_07_13$
 declare
    v_row record;
    v_sheet record;
@@ -1394,9 +1459,8 @@ begin
 		for v_def in
 			select v.value->>'name' fld_name, t.key type_key, 
 			  case 
-				  when v_row.new_data ? (v.value->>'name') then v_row.new_data->>(v.value->>'name')
 				  when t.key in ('R','M','H') then v_row.refs->>(v.value->>'name')
-				  else v_row.row_data->>(v.value->>'name')
+				  else v_row.new_data->>(v.value->>'name')
 			  end "value", 
 			  a.ref_enum_key, a.id, a.name col_name,
 			  ra.name ref_attribute,
@@ -1409,7 +1473,9 @@ begin
 			left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(a.flags) and nn.key = 'NN'
 			left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(a.flags) and uk.key = 'UQ'
 			left join meta.attribute ra on ra.id = a.ref_attribute_id
-		loop
+			where v_row.new_data ? (v.value->>'name')
+			order by a.id
+		loop 
             v_val = data.value_check(jsonb_build_object(
               'type', v_def.type_key,
               'value', v_def.value,
@@ -1428,7 +1494,6 @@ begin
             if (v_val->>'error') is not null then
                 return jsonb_build_object('error', v_val->>'error');
             end if;
-
             v_row.row_data = v_row.row_data||jsonb_build_object(v_def.fld_name, v_val->'value');
 			if v_def.type_key in ('R','r','M','E','H') then
 				v_row.refs = v_row.refs - v_def.fld_name;
@@ -1457,7 +1522,7 @@ begin
 
     return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end
-$data_sheet_set_rvt__2026_07_10$;
+$data_sheet_set_rvt__2026_07_13$;
 
 
 create function data.filter(f_version_id bigint, f_params jsonb)
@@ -2141,3 +2206,37 @@ begin
 
 end
 $data_filter_part_get__2026_07_02$;
+
+create function meta.sheet_set_pg(f_params jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $meta_sheet_set_pg__2026_07_14$
+declare 
+  v_sheet record;
+begin
+
+  select t.guid, t.oid, t.name, t.id
+  into v_sheet
+  from meta.pg_table t
+  where t.guid = (f_params->>'guid')::uuid or ((f_params->>'guid') is null and t.name = (f_params->>'table'));
+  
+  if v_sheet.oid is null then
+  	return jsonb_build_object('error', format('Таблица %s %s не существует', (f_params->>'guid'), (f_params->>'table')));
+  end if;
+  
+  if v_sheet.id is null then
+  	insert into data.row(entity_id, guid, version_id)
+	select t.id, v_sheet.guid, t.version_id
+	from  meta.entity t
+	where t.guid = uuid_nil()
+	returning id into v_sheet.id;
+	
+	insert into meta.entity(id, guid, version_id, entity_type, title)
+	select r.id, r.guid, r.version_id, 'PHYS', coalesce(f_params->>'title', v_sheet.name)
+	from data.row r
+	where r.id = v_sheet.id;
+  end if;
+  
+  return jsonb_build_object('guid', v_sheet.guid, 'table_name', v_sheet.name);
+end
+$meta_sheet_set_pg__2026_07_14$;

@@ -143,11 +143,11 @@ class MultiQuery:
                 if isinstance(ret, list):
                     ret = hdr_data(ret)
                     yield {"data": json.dumps({"type":"ret", "val":ret})}
+                yield {"data":json.dumps({"type": "end", "val":""}) }
         except asyncio.CancelledError:
             return
         except Exception as e:
             yield {"data": json.dumps({"type":"error", "val":str(e)})}
         finally:
-            yield {"data":json.dumps({"type": "end", "val":""}) }
             await sleep(1)
             MultiQuery.workers.remove(self)
