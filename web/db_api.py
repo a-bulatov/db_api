@@ -396,21 +396,21 @@ truncate table {t['t']} cascade; -- для очистки данных табл�
 
     async def attribute_info(self, env, id):
         id, attr = id.split('.')
-        attr = await env.sql("""SELECT 
-            a.attnum AS position,
-            quote_ident(a.attname) AS attribute_name,
-            format_type(a.atttypid, a.atttypmod) AS data_type,
-            a.attlen AS type_length,
-            a.attnotnull AS is_not_null,
-            a.atthasdef AS has_default_value,
-            col_description(c.oid, a.attnum) AS attribute_comment,
+        attr = await env.sql("""select 
+            a.attnum as position,
+            quote_ident(a.attname) as attribute_name,
+            format_type(a.atttypid, a.atttypmod) as data_type,
+            a.attlen as type_length,
+            a.attnotnull as is_not_null,
+            a.atthasdef as has_default_value,
+            col_description(c.oid, a.attnum) as attribute_comment,
             quote_ident(n.nspname)||'.'||quote_ident(c.relname) table_name,
-            pg_get_expr(d.adbin, d.adrelid) AS column_default
-        FROM pg_catalog.pg_attribute a
-        JOIN pg_catalog.pg_class c ON a.attrelid = c.oid
-        JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
-        LEFT JOIN  pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
-        WHERE a.attstattarget!=0 and c.oid = $1 AND a.attnum = $2 """, id, attr, ROW, OBJECT)
+            pg_get_expr(d.adbin, d.adrelid) as column_default
+        from pg_catalog.pg_attribute a
+        join pg_catalog.pg_class c on a.attrelid = c.oid
+        join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+        left join  pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
+        where a.attstattarget!=0 and c.oid = $1 and a.attnum = $2 """, id, attr, ROW, OBJECT)
         info = f"""/*
 Атрибут {attr.attribute_name} таблицы {attr.table_name}
 Тип атрибута: {attr.data_type}
