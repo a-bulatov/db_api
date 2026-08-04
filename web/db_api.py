@@ -45,58 +45,57 @@ class DbAPI:
         return x
 
     async def do_get_db_objects(self, env, **kwargs):
-        nodes = await env.sql("""       
-        select 'sh.'||(ns.oid::varchar) id, ns.nspname "text", 'fa fa-table-list' "icon",
-          (select count(*) from pg_catalog.pg_class c where c.relkind in ('r','v','m') and c.relnamespace=ns.oid) "count",
-          (select array_to_json(
-            ARRAY[json_build_object('id','functions.'||(ns.oid::varchar),'text','Функции', 'icon','fa fa-computer',
-                'count',(select count(*) from pg_catalog.pg_proc p where p.pronamespace = ns.oid),
-                'nodes',(
-                select array_to_json(array_agg(row_to_json(fnc))) from (
-                    select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-caret-right' "icon",
-                        (string_to_array(d.description,chr(10)))[1] tooltip
-                    from pg_catalog.pg_proc p
-                    left join pg_catalog.pg_description d on p.oid=d.objoid
-                    where p.pronamespace = ns.oid
-                    order by 2
-                ) fnc
-            ))]||  
-            (select array_agg(row_to_json(x)) from(
-              select case 
-                when c.relkind='r' then 'tbl.'||(c.oid::varchar)
-                when c.relkind='v' then 'v.'||(c.oid::varchar)
-                when c.relkind='m' then 'mv.'||(c.oid::varchar)
-              end id,
-              c.relname||case when inh.inhparent is null then '' 
-                when prns.oid = c.relnamespace then ' ('||prnt.relname||')'
-                else ' ('||prns.nspname||'.'||prnt.relname||')'
-              end "text",
-              case 
-                when c.relkind='r' then 'fa fa-table'
-                when c.relkind='v' then 'fa fa-table-columns'
-                when c.relkind='m' then 'fa fa-table-cells-column-lock'
-              end "icon",
-              (string_to_array(obj_description(c.oid),chr(10)))[1] tooltip,
-              (select count(*) from pg_catalog.pg_attribute a where a.attnum > 0 and a.attrelid = c.oid) "count",
-              (select array_to_json(array_agg(row_to_json(fld))) from (
-                 select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-caret-right' "icon",
-                    (string_to_array(col_description(c.oid, a.attnum),chr(10)))[1] tooltip
-                 from pg_catalog.pg_attribute a
-                 where a.attnum > 0 and a.attrelid = c.oid and a.attstattarget!=0 and a.attstattarget!=0
-                 order by a.attnum
-              ) fld ) nodes
-              from pg_catalog.pg_class c
-              left join pg_catalog.pg_inherits inh on inh.inhrelid = c.oid
-              left join pg_catalog.pg_class prnt on prnt.oid=inh.inhparent and inh.inhseqno = 1
-              left join pg_catalog.pg_namespace prns on prns.oid=prnt.relnamespace
-              where c.relnamespace = ns.oid and c.relkind in ('r','v','m')
-              order by c.relname
-            ) x)	
-          )) "nodes"
-        from pg_catalog.pg_namespace ns
-        where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
-        -- where ns.nspname not in ('pg_catalog', 'information_schema')
-        order by ns.nspname""")
+        nodes = await env.sql("""select 'sh.'||(ns.oid::varchar) id, ns.nspname "text", 'fa fa-table-list' "icon",
+(select count(*) from pg_catalog.pg_class c where c.relkind in ('r','v','m') and c.relnamespace=ns.oid) "count",
+(select array_agg(row_to_json(x)::jsonb-'nnn') from(
+    select 1 nnn, 'functions.'||(ns.oid::varchar) "id", 'Функции' "text",'fa fa-computer' "icon", null "tooltip",
+	(select count(*) from pg_catalog.pg_proc p where p.pronamespace = ns.oid) "count",
+	(
+		select array_to_json(array_agg(row_to_json(fnc))) from (
+			select 'fn.'||(p.oid::varchar) id, p.proname "text", 'fa fa-caret-right' "icon",
+				(string_to_array(d.description,chr(10)))[1] tooltip
+			from pg_catalog.pg_proc p
+			left join pg_catalog.pg_description d on p.oid=d.objoid
+			where p.pronamespace = ns.oid
+			order by 2
+		) fnc
+	) "nodes"
+    union all
+    select 3, case 
+        when c.relkind='r' then 'tbl.'||(c.oid::varchar)
+        when c.relkind='v' then 'v.'||(c.oid::varchar)
+        when c.relkind='m' then 'mv.'||(c.oid::varchar)
+      end id,
+      c.relname||case when inh.inhparent is null then '' 
+        when prns.oid = c.relnamespace then ' ('||prnt.relname||')'
+        else ' ('||prns.nspname||'.'||prnt.relname||')'
+      end "text",
+      case 
+        when c.relkind='r' then 'fa fa-table'
+        when c.relkind='v' then 'fa fa-table-columns'
+        when c.relkind='m' then 'fa fa-table-cells-column-lock'
+      end "icon",
+      (string_to_array(obj_description(c.oid),chr(10)))[1] tooltip,
+      (select count(*) from pg_catalog.pg_attribute a where a.attnum > 0 and a.attrelid = c.oid) "count",
+      (select array_to_json(array_agg(row_to_json(fld))) from (
+         select 'atr.'||(c.oid::varchar)||'.'||(a.attnum::varchar) id, a.attname as "text", 'fa fa-caret-right' "icon",
+            (string_to_array(col_description(c.oid, a.attnum),chr(10)))[1] tooltip
+         from pg_catalog.pg_attribute a
+         where a.attnum > 0 and a.attrelid = c.oid and a.attstattarget!=0 and a.attstattarget!=0
+         order by a.attnum
+      ) fld ) nodes
+      from pg_catalog.pg_class c
+      left join pg_catalog.pg_inherits inh on inh.inhrelid = c.oid
+      left join pg_catalog.pg_class prnt on prnt.oid=inh.inhparent and inh.inhseqno = 1
+      left join pg_catalog.pg_namespace prns on prns.oid=prnt.relnamespace
+      where c.relnamespace = ns.oid and c.relkind in ('r','v','m')
+      order by 1, 3
+      ) x  
+    ) "nodes"
+from pg_catalog.pg_namespace ns
+where ns.nspname !~ '^pg_' and ns.nspname <> 'information_schema'
+-- where ns.nspname not in ('pg_catalog', 'information_schema')
+order by ns.nspname""")
         tables = await self.pg_catalog(env)
 
         for schema in nodes:
@@ -155,8 +154,8 @@ class DbAPI:
             case "functions": return await self.functions_info(env, id[1])
             case "fn": return await self.function_info(env, id[1])
             case "tbl": return await self.table_info(env, id[1])
-            case "v": return await self.view_info(env, id[1], False)
-            case "mv": return await self.view_info(env, id[1], True)
+            case "v": return await self.view_info(env, id[1])
+            case "mv": return await self.view_info(env, id[1])
             case "atr": return await self.attribute_info(env, id[1])
             case "db":  return await self.database_info(env)
             case "ext":  return await self.ext_info(env)
@@ -219,9 +218,9 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
     async def functions_info(self, env, id):
         ret = await env.sql("""select x.nspname "schema", array_to_json(array_agg(x.defs)) "defs"
         from (
-        select p.proname ||' (' || pg_get_function_arguments(p.oid) ||') -> '||t.typname||
-            case when  d.description is null then '' else ' -- '||(string_to_array(d.description, chr(10))::varchar[])[1] end||
-            '   [ '||p.oid::varchar||' ]' defs,
+        select '   [ '||p.oid::varchar||' ]  '||p.proname ||' (' || pg_get_function_arguments(p.oid) ||') -> '||t.typname||
+            case when  d.description is null then '' else ' -- '||(string_to_array(d.description, chr(10))::varchar[])[1] end
+             defs,
             n.nspname 
         from pg_catalog.pg_proc p
         inner join pg_catalog.pg_namespace n on p.pronamespace = n.oid
@@ -389,10 +388,22 @@ truncate table {t['t']} cascade; -- для очистки данных табл�
 
         return ret + "\n*/"
 
-    async def view_info(self, env, id, materialized):
-        if materialized:
-            return f"-- мат. представление { id }"
-        return f"-- представление { id }"
+    async def view_info(self, env, id):
+        try:
+            d = await env.sql("""select v.definition, c.relkind, quote_ident(n.nspname)||'.'||quote_ident(c.relname) as "name"
+            from pg_catalog.pg_views v
+            inner join pg_catalog.pg_class c on c.relname = v.viewname
+            inner join pg_catalog.pg_namespace n on n.oid = c.relnamespace and n.nspname = v.schemaname
+            where c.oid = $1""", id, ROW, OBJECT)
+        except Exception as e:
+            return str(e)
+        ret = "материальное " if d.relkind == "m" else ""
+        ret = f"-- {ret}представление { id }\ncreate "
+        if d.relkind == "m":
+            ret += "material "
+        ret += f"view {d.name} as(\n{d.definition[:-1]}\n)"
+
+        return ret
 
     async def attribute_info(self, env, id):
         id, attr = id.split('.')
