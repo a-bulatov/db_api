@@ -6,7 +6,31 @@ select meta.sheet_set('{"title":"test",
     {"name": "flag","type": "B"}
 ]}')
 
--- {"guid": "16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "version_guid": "4903f726-e23a-4b50-9899-f20528857162"}
+select meta.sheet_set('{"title":"refs",
+"guid":"631d0a40-3d8d-407e-bd43-d0675fede9fb",
+"columns":[
+    {"name": "id", 	"type": "I"},
+    {"name": "ref","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"},
+    {"name": "data_type","type": "E", "reference":"data_type"}
+]}')
+
+select meta.sheet_set('{"title":"multi refs",
+"guid":"6ed9a6ea-af93-47ee-bf43-937304e2f663",
+"columns":[
+    {"name": "id", 	"type": "I"},
+    {"name": "ref","type": "M", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
+]}')
+
+select meta.sheet_set('{"title":"Сопроводительная документация",
+"guid":"00000000-0000-0000-0000-000000000005",
+"entity_type":"RVT",
+"columns":[
+    {"name": "title_short", "type": "S", "title":"Краткое наименование", "is_unique": true},
+    {"name": "title", "type": "S", "title":"Наименование"},
+    {"name": "ref_id","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
+]}')
+
+
 
 select data.sheet_set('{"guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7",
 "rows":[
@@ -21,27 +45,10 @@ select data.sheet_set('{"guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7",
 {"data":{"id":2,"name":"bbb"}, "guid":"3fa7d460-baf9-446b-bc66-f3a8a9db5470"}
 ]}')
 
-
-select meta.sheet_set('{"title":"refs",
-"guid":"631d0a40-3d8d-407e-bd43-d0675fede9fb",
-"columns":[
-    {"name": "id", 	"type": "I"},
-    {"name": "ref","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"},
-    {"name": "data_type","type": "E", "reference":"data_type"}
-]}')
-
-
 select data.sheet_set('{"guid":"631d0a40-3d8d-407e-bd43-d0675fede9fb",
 "rows":[
 {"data":{"id":1,"ref":"75e8989f-8d03-429e-9233-0e6117880715"}},
 {"data":{"id":2,"ref":"30fa5076-de4d-4bab-9bfa-550d2ff1f6dd", "data_type":"S"}}
-]}')
-
-select meta.sheet_set('{"title":"multi refs",
-"guid":"6ed9a6ea-af93-47ee-bf43-937304e2f663", `
-"columns":[
-    {"name": "id", 	"type": "I"},
-    {"name": "ref","type": "M", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
 ]}')
 
 select data.sheet_set('{
@@ -64,16 +71,6 @@ select data.sheet_set('{
 {"data":{"id":1,"ref_id":"75e8989f-8d03-429e-9233-0e6117880715"}}
 ]}')
 
-
-select meta.sheet_set('{"title":"Сопроводительная документация",
-"guid":"00000000-0000-0000-0000-000000000005",
-"entity_type":"RVT",
-"columns":[
-    {"name": "title_short", "type": "S", "title":"Краткое наименование", "is_unique": true},
-    {"name": "title", "type": "S", "title":"Наименование"},
-    {"name": "ref_id","type": "R", "reference_guid":"16fd4cba-a57f-4637-bfc8-1a17e0936fe7", "reference_names":"name"}
-]}')
-
 select data.sheet_set('{
 "guid":"00000000-0000-0000-0000-000000000005",
 "rows":[
@@ -82,7 +79,7 @@ select data.sheet_set('{
 ]}')
 
 
-drop schema  if exists demo;
+drop schema  if exists demo cascade;
 
 create schema demo;
 
@@ -118,3 +115,8 @@ CREATE TABLE demo.order_items (
    quantity INTEGER NOT NULL CHECK (quantity > 0),
    price_at_moment NUMERIC(10, 2) NOT NULL
 );
+
+insert into demo.users(username, email)
+values('Василий Чапаев','chapay@mail.ru'),
+('Петька Исаев','petka@mail.ru'),
+('Анка Попова','anka@mail.ru')

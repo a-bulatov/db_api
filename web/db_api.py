@@ -226,7 +226,8 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         inner join pg_catalog.pg_namespace n on p.pronamespace = n.oid
         inner join pg_catalog.pg_type t on p.prorettype = t.oid
         left join pg_catalog.pg_description d on p.oid = d.objoid
-        where p.prokind in ('f', 'p', 'a') and n.oid  = $1 
+        where --p.prokind in ('f', 'p', 'a') and 
+        n.oid  = $1 
         order by p.proname) x group by x.nspname""", id,  ROW, OBJECT)
         ret = f"/*\nФункции схемы { ret.schema}:\n\n " + "\n ".join(ret.defs) + "\n\n*/"
         return ret
