@@ -253,21 +253,25 @@ create table "data"."row" (
 
 
 create view meta.pg_table as (
-  with pt as (
-	select x.oid, x.t_name "name", (left(x.h1,8)||'-'||right(h1,4)||'-4321-ab'||left(x.h2,2)||'-'||right(x.h2,12))::uuid guid
-	from (
-	select c.oid::bigint, n.nspname||'.'||c.relname t_name, lpad(to_hex(hashtext(n.nspname::varchar)),12,'0') h1, rpad(to_hex(hashtext(c.relname)),14,'0') h2
-	from pg_catalog.pg_class c
-	inner join pg_catalog.pg_namespace n on c.relnamespace = n.oid
-	where relkind='r'
-	) x
-  )
+    with pt as (
+      select x.oid, x.t_name "name", (left(x.h1,8)||'-'||right(h1,4)||'-4321-ab'||left(x.h2,2)||'-'||right(x.h2,12))::uuid guid
+      from (
+      select c.oid::bigint, n.nspname||'.'||c.relname t_name, lpad(to_hex(hashtext(n.nspname::varchar)),12,'0') h1, rpad(to_hex(hashtext(c.relname)),14,'0') h2
+      from pg_catalog.pg_class c
+      inner join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+      where relkind='r'
+      ) x
+    )
 
-  select pt.guid, pt.oid, pt.name, r.id
-  from pt
-  inner join meta.entity t on t.guid = uuid_nil()
-  left join data.row r on r.entity_id = t.id and r.guid = pt.guid
-  order by pt.name
+    select pt.guid, pt.oid, pt.name, r.id, a.name key_name, ta."key" "key_type"
+    from pt
+    inner join meta.entity t on t.guid = uuid_nil()
+    inner join meta.enum epkt on epkt.parent_id is null and epkt.key = 'attr_flags'
+    inner join meta.enum epk on epk.parent_id = epkt.id and epk.key = 'PK'
+    left join data.row r on r.entity_id = t.id and r.guid = pt.guid
+    left join meta.attribute a on a.entity_id = r.id and epk.id =any(a.flags)
+    left join meta.data_type ta on ta.id = a.type_id
+    order by pt.name
 );
 
 create function meta.field_list(f_params jsonb)
@@ -561,7 +565,7 @@ $meta_sheet_set__2026_07_16$;
 create function meta.sheet_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_get__2026_07_16$
+AS $meta_sheet_get__2026_08_07$
 declare
    v_sheet record;
    v_ret jsonb;
@@ -611,7 +615,7 @@ begin
                     else jsonb_build_object()
                  end||
 			  	 case
-			  		when ro.id is not null then jsonb_build_object('editable',false)
+			  		when t.key = 'r' or ro.id is not null then jsonb_build_object('editable',false)
 			  		else jsonb_build_object()
                  end
 				 defs
@@ -634,7 +638,7 @@ begin
         where e.id = v_sheet.id
    );
 end;
-$meta_sheet_get__2026_07_16$;
+$meta_sheet_get__2026_08_07$;
 
 
 create function meta.sheet_list(f_params jsonb default null)
@@ -1039,7 +1043,7 @@ begin
 		coalesce((f_params->>'is_nullable')::boolean, true) is_nullable,
 		(f_params->>'row_id')::bigint row_id,
 		(f_params->>'type') "type",
-		(f_params->>'referencе') ref,
+		(f_params->>'referencе') as ref,
 		(f_params->>'ref_attribute') "ref_attribute",
 		(f_params->>'entity_id')::bigint entity_id,
 		(f_params->>'version_id')::bigint version_id,
@@ -1145,7 +1149,7 @@ $data_value_check__2026_08_06$;
 create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set__2026_08_06$
+AS $data_sheet_set__2026_08_07$
 declare
    v_sheet record;
    v_counters record;
@@ -1182,10 +1186,13 @@ begin
    if v_sheet.id is Null then
         return jsonb_build_object('error',format( 'Таблица %s не существует или нет указанной версии %s.',f_params->>'guid', f_params->>'version_guid'));
    end if;
+   
+   f_params = f_params || jsonb_build_object('_SYS_INFO_', row_to_json(v_sheet));
 
-   if v_sheet.entity_type='RVT' then
-        f_params = f_params || jsonb_build_object('_SYS_INFO_', row_to_json(v_sheet));
-        return data.sheet_set_rvt(f_params);
+   if v_sheet.entity_type='RVT' then      
+	  return data.sheet_set_rvt(f_params);
+   elseif v_sheet.entity_type='PHYS' then
+      return data.sheet_set_pg(f_params);
    end if;
 
    if v_sheet.version_id is Null or coalesce((f_params->>'up_version')='true', false) or v_sheet.version_staus != 'D' then
@@ -1369,7 +1376,7 @@ begin
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end;
-$data_sheet_set__2026_08_06$;
+$data_sheet_set__2026_08_07$;
 
 
 create function data.sheet_set_rvt(f_params jsonb)
@@ -1655,7 +1662,7 @@ begin
 
    if (f_params->>'filter') is null and (f_params->>'order') is null then
         v_query = format($q$
-			select x.id, row_number() over (order by x.id)::integer npp, null::smallint[] mac
+			select x.id, row_number() over (order by x.id)::integer npp, null::smallint[] "mac"
              from (
 			   select t.id
 			   from data.rvt_%s t
@@ -1666,12 +1673,12 @@ begin
 		$q$, v_version.entity_id, v_version.id, v_limits);
    elseif (f_params->>'filter') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
         v_query = format($q$
-			select r.id, 1::integer npp, null::smallint[] mac
+			select r.id, 1::integer npp, null::smallint[] "mac"
 			from data.row r where r.guid=%L::uuid
 		$q$, f_params->>'filter');
    elseif jsonb_typeof(f_params->'filter') = 'array' and (f_params->'filter'->>0)~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
 		v_query = format($q$
-			select r.id, x.npp::integer, null::smallint[] mac
+			select r.id, x.npp::integer, null::smallint[] "mac"
 			from (
 			  select x.value::uuid guid, row_number() over () as npp
 			  from jsonb_array_elements_text(%L::jsonb) x
@@ -1685,7 +1692,7 @@ begin
 			raise exception '%', v_query ->> 'error';
 		end if;
 		v_query = v_js->>'query';
-		v_query = format($q$select r.id, x.npp::integer, null::smallint[] mac
+		v_query = format($q$select r.id, x.npp::integer, null::smallint[] "mac"
 		from(%s) x
 		inner join data.row r on r.guid = x."PK_GUID"
 		$q$, v_query);
@@ -2244,7 +2251,7 @@ $data_filter_part_get__2026_08_04$;
 create function meta.sheet_set_pg(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set_pg__2026_08_04$
+AS $meta_sheet_set_pg__2026_08_07$
 declare
   v_sheet record;
   v_attr record;
@@ -2252,21 +2259,33 @@ declare
   v_type char(1);
   i_tmp bigint;
 begin
+  
   select pt.guid, pt.oid, pt.name, pt.id, null::bigint version_id,
-  	a.attname as key_field,
-	pg_get_expr(d.adbin, d.adrelid) is not null key_gen,
-	case when t.typcategory='N' then 'N' else 'G' end "key_type"
-  into v_sheet
+  	a.attname as key_field,	a."key_type"
+  into v_sheet 
   from meta.pg_table pt
-  join pg_catalog.pg_class c on c.oid = pt.oid
-  join pg_catalog.pg_attribute a on a.attrelid = c.oid
-  left join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
-  left join pg_catalog.pg_type t on t.oid = a.atttypid and (t.typcategory = 'N' or t.typname='uuid') and a.attnotnull
-  left join pg_catalog.pg_namespace n on c.relnamespace = n.oid
-  left join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
-  and cn.contype in ('u','p')
-  where a.attstattarget!=0 and pt.guid = (f_params->>'guid')::uuid or ((f_params->>'guid') is null and pt.name = (f_params->>'table'))
-  order by 8 limit 1;
+  inner join (
+	with pt0 as (
+	  select oid
+	  from meta.pg_table t
+	  where t.guid = (f_params->>'guid')::uuid or ((f_params->>'guid') is null and t.name = (f_params->>'table'))
+	)
+	select case when t.typcategory='N' then 'N' else 'G' end "key_type",
+	  c.oid, a.attname, cn.contype,
+	  pg_get_expr(d.adbin, d.adrelid) is not null key_gen
+	from pg_catalog.pg_class c 
+	join pt0 on pt0.oid = c.oid
+	join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum>0
+	join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
+	join pg_catalog.pg_type t on t.oid = a.atttypid and (t.typcategory = 'N' or t.typname='uuid') and a.attnotnull
+	join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+	join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
+	and cn.contype in ('u','p')
+	union all
+	select null, pt0.oid, null, null, null
+	from pt0
+	order by 1 nulls last limit 1
+  ) a on a.oid = pt.oid;
 
   if v_sheet.oid is null then
   	return jsonb_build_object('error', format('Таблица %s %s не существует', (f_params->>'guid'), (f_params->>'table')));
@@ -2385,22 +2404,22 @@ begin
 
   return jsonb_build_object('guid', v_sheet.guid, 'table_name', v_sheet.name);
 end
-$meta_sheet_set_pg__2026_08_04$;
+$meta_sheet_set_pg__2026_08_07$;
 
 
 create function meta.int2guid(x bigint)
  RETURNS uuid
  LANGUAGE plpgsql
  STABLE
-AS $meta_int2guid__2026_07_17$
+AS $meta_int2guid__2026_08_10$
 declare
  s varchar(36);
 begin
- s = lpad(to_hex(x), 20, '0');
- s = left(s,8)||'-0000-1000-a000-'||right(s,12);
+ s = lpad(to_hex(x), 16, '0');
+ s = left(s,4)||'0000-dcba-1001-abcd-'||right(s,12);
  return s::uuid;
 end
-$meta_int2guid__2026_07_17$;
+$meta_int2guid__2026_08_10$;
 
 create function data.sheet_get_pg(f_params jsonb)
  RETURNS jsonb
@@ -2500,3 +2519,125 @@ $q$||(v_ret->>'order');
    );
 end
 $data_sheet_get_pg__2026_08_04$;
+
+create function data.sheet_set_pg(f_params jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $data_sheet_set_pg__2026_08_10$
+declare
+   v_sheet record;
+   v_row record;
+   v_data record;
+   v_counters record;
+   v_columns jsonb;
+   v_query  text = '';
+   v_values text = '';
+   to_update boolean;
+begin
+   if f_params->>'_SYS_INFO_' is null then
+	 return jsonb_build_object('error','Функция sheet_set_rvt не предназначена для самостоятельного вызова');
+   end if;
+   select
+	 (f_params->'_SYS_INFO_'->>'id')::bigint id,
+	 (f_params->'_SYS_INFO_'->>'version_id')::bigint version_id,
+	 (f_params->'_SYS_INFO_'->>'version_staus') version_staus,
+	 (f_params->'_SYS_INFO_'->>'version_exists')::boolean version_exists,
+	 (f_params->'_SYS_INFO_'->>'guid')::uuid guid,
+	 (f_params->'_SYS_INFO_'->>'version_guid')::uuid version_guid,
+	 quote_ident(pgt.key_name) as key_name,
+	 pgt.key_type,
+	 quote_ident(n.nspname)||'.'||quote_ident(c.relname) table_name
+   from meta.pg_table pgt
+   inner join pg_catalog.pg_class c on c.oid = pgt.oid
+   inner join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+   where pgt.guid = (f_params->'_SYS_INFO_'->>'guid')::uuid
+   into v_sheet;
+   
+   if v_sheet.key_name is null then
+     return jsonb_build_object('error','Запись в таблицу невозможна т.к. отсутствует допустимый ключ');
+   end if;
+   
+   v_columns = meta.sheet_get(jsonb_build_object('guid', v_sheet.guid))->'columns';
+   select
+	 0::bigint "input",
+	 0::bigint "deleted",
+	 0::bigint "updated",
+	 0::bigint "inserted"
+   into v_counters;
+     
+   for v_row in
+	  select
+		 (x.value->>'guid')::uuid guid,
+		 (x.value->'data') "data",
+		 coalesce((x.value->>'delete')::boolean, false) to_delete,
+		 case when v_sheet.key_type='I' 
+		 	then ('x'||left((x.value->>'guid'),4)||right((x.value->>'guid'),12))::bit(64)::bigint::varchar
+		 	else quote_literal(x.value->>'guid')||'||::uuid'
+		 end "id"
+	  from jsonb_array_elements(f_params->'rows') x
+   loop
+   	 v_counters.input = v_counters.input + 1;
+	 if v_row.to_delete and v_row.guid is null then
+	 	continue;
+	 elseif v_row.to_delete then
+	 	v_query = format($q$delete from %s where %s = %s$q$, v_sheet.table_name, v_sheet.key_name, v_row.id); 
+		raise notice '%', v_query;
+		/* execute v_query; */
+		v_counters.deleted = v_counters.deleted + 1;
+	 	continue;
+	 end if;
+	 
+	 if v_row.guid is null then
+	 	to_update = false;
+	 else
+	   v_query = format($q$select exists(select 1 from %s t where t.%s = %s)$q$, v_sheet.table_name, v_sheet.key_name, v_row.id);
+	   execute v_query into to_update;
+	 end if;  
+	   
+	 if to_update then
+	 	v_query = format($q$update %s set $q$, v_sheet.table_name);
+		v_counters.updated = v_counters.updated + 1;
+	 else
+	 	v_query = '';
+		v_counters.inserted = v_counters.inserted + 1;
+	 end if;
+		 
+	 for v_data in
+	 	select quote_ident(c.value->>'name') "name",
+			c.value->>'type' "type",
+			case when (c.value->>'type') in ('S','G','T','J')
+				then quote_literal(v.value)
+				else v.value
+			end "value"
+		from jsonb_each_text(v_row.data) v
+		inner join jsonb_array_elements(v_columns) c on (c.value->>'name') = v.key
+		where coalesce(c.value->>'editable','')!='false'
+	 loop
+	 	if to_update then
+			v_query = format($q$%s
+ %s = %s,$q$, v_query, v_data.name, v_data.value);
+		else
+			v_query = v_query||v_data.name||',';
+			v_values = v_values||v_data.value||',';
+		end if;
+	 end loop;
+	 
+	 v_query = left(v_query,length(v_query)-1);
+	 
+	 if to_update then
+	 	v_query = format($q$%s
+where %s = %s $q$, v_query, v_sheet.key_name, v_row.id);
+	 else
+	 	v_values = left(v_values,length(v_values)-1);
+		v_query = format($q$insert into %s
+(%s)
+values
+(%s)$q$, v_sheet.table_name, v_query, v_values);
+	 end if;
+	 
+raise notice '%', v_query;
+   end loop;
+
+   return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
+end
+$data_sheet_set_pg__2026_08_10$;
