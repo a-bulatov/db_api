@@ -2523,7 +2523,7 @@ $data_sheet_get_pg__2026_08_04$;
 create function data.sheet_set_pg(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set_pg__2026_08_10$
+AS $data_sheet_set_pg__2026_08_11$
 declare
    v_sheet record;
    v_row record;
@@ -2581,8 +2581,7 @@ begin
 	 	continue;
 	 elseif v_row.to_delete then
 	 	v_query = format($q$delete from %s where %s = %s$q$, v_sheet.table_name, v_sheet.key_name, v_row.id); 
-		raise notice '%', v_query;
-		/* execute v_query; */
+		execute v_query;
 		v_counters.deleted = v_counters.deleted + 1;
 	 	continue;
 	 end if;
@@ -2635,9 +2634,9 @@ values
 (%s)$q$, v_sheet.table_name, v_query, v_values);
 	 end if;
 	 
-raise notice '%', v_query;
+	 execute v_query;
    end loop;
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end
-$data_sheet_set_pg__2026_08_10$;
+$data_sheet_set_pg__2026_08_11$;
