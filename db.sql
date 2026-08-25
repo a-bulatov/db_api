@@ -347,7 +347,7 @@ $$;
 create function meta.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set__2026_07_16$
+AS $meta_sheet_set__2026_08_24$
 declare
     v_sheet record;
     v_column record;
@@ -360,9 +360,14 @@ begin
     end if;
 
     v_force = coalesce((f_params ->> 'force')::boolean,false);
+	
+	select t.guid::varchar
+	into v_tmp
+	from meta.pg_table t 
+	where t.guid = (f_params->>'guid')::uuid or t."name"=(f_params->>'table_name');
 
-	if exists(select 1 from meta.pg_table t where t.guid = (f_params->>'guid')::uuid) then
-		f_params = f_params || jsonb_build_object('entity_type', 'PHYS');
+	if v_tmp is not null then
+		f_params = f_params || jsonb_build_object('entity_type', 'PHYS', 'guid', v_tmp);
 	end if;
 
     select
@@ -559,13 +564,13 @@ begin
         where e.id = v_sheet.id
     );
 end;
-$meta_sheet_set__2026_07_16$;
+$meta_sheet_set__2026_08_24$;
 
 
 create function meta.sheet_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_get__2026_08_07$
+AS $meta_sheet_get__2026_08_25$
 declare
    v_sheet record;
    v_ret jsonb;
@@ -595,16 +600,19 @@ begin
                       'type', t.key,
 				      'is_nullable', (nn.id is null) and (pk.id is null),
 			  		  'is_unique', (uk.id is not null) or (pk.id is not null)
-                 )||case when t.key in ('E','R','M')
-				 	then jsonb_build_object(
-				 	    'reference',c.ref_enum_key,
-				 	    'reference_guid',c.ref_enum_key -- старый вариант. удалить !!
+                 )||case 
+			  		when t.key in ('R','M') then jsonb_build_object(
+					    'reference', ea.guid
+					)
+			  		when t.key = 'E' then jsonb_build_object(
+				 	    'reference',c.ref_enum_key
+				 	    /*'reference_guid',c.ref_enum_key -- старый вариант. удалить !!*/
 				 	)
 					else jsonb_build_object()
 				 end||case when t.key in ('R','M')
 				 	then jsonb_build_object(
-				 	    'reference_column',a.name,
-				 	    'reference_names',a.name -- старый вариант. удалить !!
+				 	    'reference_column',a.name
+				 	    /*'reference_names',a.name -- старый вариант. удалить !!*/
 				 	)
 					else jsonb_build_object()
 				 end||case when t.key = 'r'
@@ -623,6 +631,7 @@ begin
                  inner join meta.data_type t on t.id = c.type_id
 			  	 inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
 				 left join meta.attribute a on a.id = c.ref_attribute_id
+			  	 left join meta.entity ea on ea.id = a.entity_id	
 			  	 left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(c.flags) and nn.key = 'NN'
 				 left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(c.flags) and uk.key = 'UQ'
 			  	 left join meta.enum ro on ro.parent_id = flg.id and ro.id = any(c.flags) and ro.key = 'RO'
@@ -638,7 +647,7 @@ begin
         where e.id = v_sheet.id
    );
 end;
-$meta_sheet_get__2026_08_07$;
+$meta_sheet_get__2026_08_25$;
 
 
 create function meta.sheet_list(f_params jsonb default null)
@@ -1149,7 +1158,7 @@ $data_value_check__2026_08_06$;
 create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set__2026_08_07$
+AS $data_sheet_set__2026_08_21$
 declare
    v_sheet record;
    v_counters record;
@@ -1236,7 +1245,8 @@ begin
         from (
             select coalesce((x.value->>'guid')::uuid, uuid_generate_v4()) guid,
                    (x.value->'data') "data",
-                   (x.value->>'delete')::boolean to_delete
+                   (x.value->>'delete')::boolean to_delete,
+		  		   row_number() over() npp 	
             from jsonb_array_elements(f_params->'rows') x
         ) rows
 		inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
@@ -1249,6 +1259,7 @@ begin
         left join data.eav dea on dea.version_id=v_sheet.version_id and dea.id=db_rows.id and dea.attribute_id=col.id
 		left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(col.flags) and nn.key = 'NN'
 		left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(col.flags) and uk.key = 'UQ'
+		order by rows.npp
    loop
         if v_row.guid != tmp_row_guid then
             tmp_row_guid = v_row.guid;
@@ -1376,13 +1387,13 @@ begin
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end;
-$data_sheet_set__2026_08_07$;
+$data_sheet_set__2026_08_21$;
 
 
 create function data.sheet_set_rvt(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set_rvt__2026_08_06$
+AS $data_sheet_set_rvt__2026_08_21$
 declare
    v_row record;
    v_sheet record;
@@ -1438,7 +1449,8 @@ begin
 		     (x.value->>'class_guid')::uuid class_guid,
 			 (x.value->>'version_guid')::uuid version_guid,
 			 (x.value->'data') "data",
-			 coalesce((x.value->>'delete')::boolean, false) to_delete
+			 coalesce((x.value->>'delete')::boolean, false) to_delete,
+		  	 row_number() over() npp
 		  from jsonb_array_elements(f_params->'rows') x
 		) j
 		left join meta.version v on v.guid = j.version_guid
@@ -1447,6 +1459,7 @@ begin
 		left join meta.version rv on rv.id = coalesce(v.id, r.version_id)
 		left join meta.version lv on lv.id = r.id and lv.status in ('L','C')
 		left join data.rvt rvt on rvt.id = r.id and rvt.entity_id = v_sheet.id and rvt.version_id = rv.id
+		order by j.npp
     loop
         v_counters.input = v_counters.input + 1;
 		if not v_row.ver_is_correct then
@@ -1546,7 +1559,7 @@ begin
 
     return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end
-$data_sheet_set_rvt__2026_08_06$;
+$data_sheet_set_rvt__2026_08_21$;
 
 
 create function data.filter(f_version_id bigint, f_params jsonb)
@@ -2251,13 +2264,14 @@ $data_filter_part_get__2026_08_04$;
 create function meta.sheet_set_pg(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set_pg__2026_08_07$
+AS $meta_sheet_set_pg__2026_08_25$
 declare
   v_sheet record;
   v_attr record;
   v_flags integer[] = '{}'::integer[];
   v_type char(1);
   i_tmp bigint;
+  j_tmp jsonb;
 begin
   
   select pt.guid, pt.oid, pt.name, pt.id, null::bigint version_id,
@@ -2285,7 +2299,7 @@ begin
 	select null, pt0.oid, null, null, null
 	from pt0
 	order by 1 nulls last limit 1
-  ) a on a.oid = pt.oid;
+  ) a on a.oid = pt.oid limit 1;
 
   if v_sheet.oid is null then
   	return jsonb_build_object('error', format('Таблица %s %s не существует', (f_params->>'guid'), (f_params->>'table')));
@@ -2354,9 +2368,12 @@ begin
 		else 'S'
 	end;
 
-  	if v_attr.is_not_null then
-		v_flags = meta.enmum_ids_set('attr_flags','NN');
-	end if;
+  	
+	v_flags = case when v_attr.is_not_null 
+		then meta.enmum_ids_set('attr_flags','NN')
+		else '{}'::integer[]
+	end;
+	
 	if v_attr.is_unique then
 		v_flags = meta.enmum_ids_set('attr_flags','UQ', true, v_flags);
 	end if;
@@ -2374,7 +2391,68 @@ begin
 	 title = excluded.title
 	;
   end loop;
-
+  
+  /* добавляем таблицы, которых не хватает для внешних ссылок */  
+  for v_attr in
+  	select rnm.nspname||'.'|| rcl.relname need_table, null::bigint to_table_id,
+		a.name from_col, a.id from_col_id, null::bigint to_col_id, ref_t.id ref_t_id
+	from meta.pg_table pgt
+	inner join meta.attribute a on a.entity_id = pgt.id 
+	inner join meta.data_type t on t.id = a.type_id and t.key='I'
+	inner join pg_catalog.pg_attribute pa on pa.attname = a.name and pa.attrelid = pgt.oid
+	inner join pg_catalog.pg_constraint cn on cn.contype = 'f'  and cn.conrelid = pgt.oid and pa.attnum  = any(cn.conkey) and array_length(cn.conkey,1)=1
+	inner join pg_catalog.pg_class rcl on rcl.oid = cn.confrelid
+	inner join pg_catalog.pg_namespace rnm on rnm.oid = rcl.relnamespace
+	inner join pg_catalog.pg_attribute rat on rat.attrelid =  rcl.oid and rat.attnum = any(cn.confkey)
+	inner join meta.data_type ref_t on ref_t.key = 'R'
+	left join meta.pg_table pgt2 on pgt2.oid = rcl.oid
+	where pgt2.id is null and pgt.id = v_sheet.id
+  loop
+    j_tmp = meta.sheet_set(jsonb_build_object('table_name', v_attr.need_table));
+	if j_tmp ? 'error' then
+		return j_tmp;
+	end if;
+	
+	select e.id into v_attr.to_table_id
+	from meta.entity e where e.guid = (j_tmp->>'guid')::uuid;
+	
+	/* Поиск  именующего атрибута */
+	select x.id into v_attr.to_col_id from (	  
+	  select x.n, a.id
+	  from meta.attribute a
+	  left join (
+		select 'title' nm, 1 n
+		union all select * from (values
+		  ('name', 2),
+		  ('key', 3),
+		  ('%name', 4)
+		) v
+	  ) x on a.name ilike x.nm
+	  where a.entity_id = v_attr.to_table_id
+	  union all
+	  select (row_number() over(order by a.id))+100, a.id
+	  from meta.attribute a
+	  inner join meta.data_type t on a.type_id = t.id and t.key = 'S'
+	  where a.entity_id = v_attr.to_table_id
+	  union all
+	  select (row_number() over(order by a.id))+200, a.id
+	  from meta.attribute a
+	  inner join meta.data_type t on a.type_id = t.id
+	  where a.entity_id = v_attr.to_table_id	
+	) x order by 1 limit 1;
+	
+	if v_attr.to_col_id is null then
+	  return jsonb_build_object('error', format('Для атрибута-ссылки %s не найдено какое значение вывести', v_attr.from_col));
+	end if;
+	
+	update meta.attribute set
+	 	type_id = v_attr.ref_t_id,
+		ref_attribute_id = v_attr.to_col_id
+	where id = v_attr.from_col_id;
+	
+  end loop;
+  
+						   
   if not exists(select 1
 	from meta.attribute a
 	inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
@@ -2404,7 +2482,7 @@ begin
 
   return jsonb_build_object('guid', v_sheet.guid, 'table_name', v_sheet.name);
 end
-$meta_sheet_set_pg__2026_08_07$;
+$meta_sheet_set_pg__2026_08_25$;
 
 
 create function meta.int2guid(x bigint)
