@@ -116,7 +116,75 @@ CREATE TABLE demo.order_items (
    price_at_moment NUMERIC(10, 2) NOT NULL
 );
 
+CREATE TABLE demo.rank(
+    rank_id uuid primary key default uuid_generate_v4(),
+    rank_name varchar(100) not null
+);
+
+INSERT INTO demo.rank(rank_id, rank_name)
+values('4bc08df4-6b47-497b-b9f7-be8ef4b32366','начдив'),
+('54c54dfe-df08-44e4-9824-3069c5ff2c03','ординарец'),
+('797b4e81-cccd-4fda-9268-0c35435b239b', 'красноармеец');
+
 insert into demo.users(username, email)
 values('Василий Чапаев','chapay@mail.ru'),
 ('Петька Исаев','petka@mail.ru'),
-('Анка Попова','anka@mail.ru')
+('Анка Попова','anka@mail.ru');
+
+insert into demo.products(name, price, stock_quantity)
+values('пулемет Максим', 370.52,5),
+      ('тачанка', 1500.75, 1),
+      ('буденовка', 3.50, 99);
+
+with op as (
+        select u.user_id, now() d, p.price, p.product_id
+        from demo.users u
+        inner join demo.products p on p.name = 'буденовка'
+        where u.username = 'Петька Исаев'
+),
+ps as (
+    insert into demo.orders(user_id, order_date, total_amount)
+    select user_id, d, price from op
+    returning demo.orders.order_id
+)
+insert into demo.order_items(order_id, product_id, quantity, price_at_moment)
+select ps.order_id, op.product_id, 1, op.price
+from op
+inner join ps on true;
+
+
+--------------------------------
+select meta.sheet_set('{
+  "title": "ссылка на физику",
+  "guid": "3878ff67-2d88-420b-9a5a-329156141f24",
+  "columns":[
+    {
+      "name": "title",
+      "type": "S"
+    },
+    {
+      "name": "user_ref",
+      "type": "R",
+      "reference_column":"username",
+      "reference": "0000a1d1-6442-4321-ab8d-0018a2000000"
+    },
+    {
+        "name": "user_dream",
+        "type": "R",
+        "title": "мечта",
+        "reference": "0000a1d1-6442-4321-ab36-08af0f000000",
+        "reference_column": "name"
+    }
+  ]
+}');
+
+select data.sheet_set('{
+ "guid": "3878ff67-2d88-420b-9a5a-329156141f24",
+ "rows":[{
+   "data":{
+     "title":"Чапай",
+     "user_ref":"00000000-dcba-1001-abcd-000000000001"
+   },
+   "guid": "82e86b77-6d47-45ee-a10c-9eff7e134314"
+ }]
+}')

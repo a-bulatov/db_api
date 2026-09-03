@@ -174,7 +174,8 @@ from (values
   ('UQ', 'Уникальный'),
   ('NN', 'Не NULL'),
   ('RO', 'Только чтение'),
-  ('PK', 'Ключ физ.таблицы')
+  ('PK', 'Ключ физ.таблицы'),
+  ('IPK','Быстрый int ключ физ.таблицы')
 ) x;
 
 
@@ -254,24 +255,29 @@ create table "data"."row" (
 
 create view meta.pg_table as (
     with pt as (
-      select x.oid, x.t_name "name", (left(x.h1,8)||'-'||right(h1,4)||'-4321-ab'||left(x.h2,2)||'-'||right(x.h2,12))::uuid guid
-      from (
-      select c.oid::bigint, n.nspname||'.'||c.relname t_name, lpad(to_hex(hashtext(n.nspname::varchar)),12,'0') h1, rpad(to_hex(hashtext(c.relname)),14,'0') h2
-      from pg_catalog.pg_class c
-      inner join pg_catalog.pg_namespace n on c.relnamespace = n.oid
-      where relkind='r'
-      ) x
-    )
+         select x.oid, x.t_name "name", (left(x.h1,8)||'-'||right(h1,4)||'-4321-ab'||left(x.h2,2)||'-'||right(x.h2,12))::uuid guid,
+      			x.schema_name, x.table_name
+         from (
+         select c.oid::bigint, n.nspname||'.'||c.relname t_name, lpad(to_hex(hashtext(n.nspname::varchar)),12,'0') h1, rpad(to_hex(hashtext(c.relname)),14,'0') h2,
+   		quote_ident(n.nspname) schema_name, quote_ident(c.relname) table_name
+         from pg_catalog.pg_class c
+         inner join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+         where relkind='r'
+         ) x
+       )
 
-    select pt.guid, pt.oid, pt.name, r.id, a.name key_name, ta."key" "key_type"
-    from pt
-    inner join meta.entity t on t.guid = uuid_nil()
-    inner join meta.enum epkt on epkt.parent_id is null and epkt.key = 'attr_flags'
-    inner join meta.enum epk on epk.parent_id = epkt.id and epk.key = 'PK'
-    left join data.row r on r.entity_id = t.id and r.guid = pt.guid
-    left join meta.attribute a on a.entity_id = r.id and epk.id =any(a.flags)
-    left join meta.data_type ta on ta.id = a.type_id
-    order by pt.name
+       select pt.guid, pt.oid, pt.name, pt.schema_name, pt.table_name,
+   		r.id, a.name key_name, ta."key" "key_type", ai.name int_key
+        from pt
+           inner join meta.entity t on t.guid = uuid_nil()
+           inner join meta.enum epkt on epkt.parent_id is null and epkt.key = 'attr_flags'
+           inner join meta.enum epk on epk.parent_id = epkt.id and epk.key = 'PK'
+       	inner join meta.enum epki on epki.parent_id = epkt.id and epki.key = 'IPK'
+           left join data.row r on r.entity_id = t.id and r.guid = pt.guid
+           left join meta.attribute a on a.entity_id = r.id and epk.id =any(a.flags)
+       	left join meta.attribute ai on ai.entity_id = r.id and epki.id =any(ai.flags)
+           left join meta.data_type ta on ta.id = a.type_id
+           order by pt.name
 );
 
 create function meta.field_list(f_params jsonb)
@@ -1158,7 +1164,7 @@ $data_value_check__2026_08_06$;
 create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set__2026_08_21$
+AS $data_sheet_set__2026_09_03$
 declare
    v_sheet record;
    v_counters record;
@@ -1241,7 +1247,9 @@ begin
 				else re.guid::varchar
 			end reference,
 			nn.id is null as is_nullable,
-			uk.id is not null as is_unique
+			uk.id is not null as is_unique,
+			pgt.key_name, pgt.int_key,
+			pgt.schema_name, pgt.table_name
         from (
             select coalesce((x.value->>'guid')::uuid, uuid_generate_v4()) guid,
                    (x.value->'data') "data",
@@ -1255,12 +1263,17 @@ begin
         left join meta.attribute col on col.entity_id = v_sheet.id and col.name = dat.key
         left join meta.attribute ra_col on ra_col.id = col.ref_attribute_Id
 		left join meta.entity re on re.id = ra_col.entity_id
+		left join meta.pg_table pgt on pgt.id = re.id 
         left join meta.data_type dt on dt.id = col.type_id
         left join data.eav dea on dea.version_id=v_sheet.version_id and dea.id=db_rows.id and dea.attribute_id=col.id
 		left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(col.flags) and nn.key = 'NN'
 		left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(col.flags) and uk.key = 'UQ'
 		order by rows.npp
    loop
+   		if v_row.attribute_id is null then
+			return jsonb_build_object('error', format('Атрибут %s не найден или ошибка в структуре входного сообщения',v_row.name));
+		end if;
+		
         if v_row.guid != tmp_row_guid then
             tmp_row_guid = v_row.guid;
             v_counters.input=v_counters.input + 1;
@@ -1283,7 +1296,20 @@ begin
 
 		if v_row.type_code = 'r' then
 			continue;
-        elseif v_row.type_code = ('R') then
+		elseif v_row.type_code = 'R' and v_row.value is not null and v_row.int_key is not null and v_row.int_key = v_row.key_name then
+			v_row.value = ('x' ||left(v_row.value, 4)||right(v_row.value,12))::bit(64)::bigint;
+			v_row.eav_field = 'i';
+		elseif v_row.type_code = 'R' and v_row.value is not null and v_row.int_key is not null then
+			tmp_value = format('select t.%s::varchar from %s.%s t where t.%s = %L', v_row.int_key, v_row.schema_name, v_row.table_name, v_row.key_name, v_row.value);
+			execute tmp_value into v_row.value;
+			if v_row.value is Null then
+               return jsonb_build_object('error', format('В таблице %s.%s не найдена запись для %s', v_row.schema_name, v_row.table_name, v_row.name));
+            end if;
+			v_row.eav_field = 'i';
+		elseif v_row.type_code = 'R' and v_row.value is not null and v_row.key_name is not null then
+			v_row.value = (v_row.value::uuid)::varchar;
+			v_row.eav_field = 's';
+        elseif v_row.type_code = 'R' and v_row.value is not null then
             tmp_value = null;
             select r.id::varchar into tmp_value
             from data.row r
@@ -1292,7 +1318,7 @@ begin
                return jsonb_build_object('error', format('Для поля %s не найдена строка по ссылке %s', v_row.name, v_row.value));
             end if;
             v_row.value = tmp_value::text;
-		elseif v_row.type_code = ('H') then
+		elseif v_row.type_code = ('H') and v_row.value is not null then
 			select r.id, d.eav_field, e.guid, a.name att_name
 			into tmp_rec
             from data.row r
@@ -1313,7 +1339,7 @@ begin
 			end if;
 			v_row.value = tmp_ret->>'value';
 			v_row.eav_field = tmp_rec.eav_field;
-        elseif v_row.type_code = 'M' then
+        elseif v_row.type_code = 'M' and v_row.value is not null then
             select count(*) cnt, sum(case when x.value is null then 0 else 1 end) chk, array_agg(r.guid)::varchar val, 'M' as t
             into tmp_rec
             from jsonb_array_elements_text(v_row.value::jsonb) x
@@ -1387,7 +1413,7 @@ begin
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end;
-$data_sheet_set__2026_08_21$;
+$data_sheet_set__2026_09_03$;
 
 
 create function data.sheet_set_rvt(f_params jsonb)
@@ -1755,7 +1781,7 @@ $$;
 create function data.sheet_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_get__2026_08_04$
+AS $data_sheet_get__2026_09_01$
 declare
    v_sheet record;
    v_ret jsonb;
@@ -1859,7 +1885,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
    elseif v_sheet.entity_type in ('EAV','VER') then
         /* возврат - чтение данных EAV */
 	   	with refs as (
-		   select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key"
+		   select a.id, (array_agg(vto.id order by e.id))[1] version_id, dto.eav_field, dto."key", eto.entity_type
 			   from meta.attribute a
 			   inner join meta.data_type dt on a.type_id = dt.id and dt.key in ('R', 'M', 'H')
 			   inner join meta.attribute ato on ato.id = a.ref_attribute_id
@@ -1868,9 +1894,9 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 			   inner join meta.version vto on vto.entity_id = eto.id and (v_sheet.status != 'D' or eto.version_id is null or vto.id = eto.version_id)
 			   inner join meta.enum e on  e.key = vto.status
 			   where e.parent_id = meta.enum_id('version_status') and a.entity_id = v_sheet.id
-			   group by a.id, dto.eav_field, dto."key"
+			   group by a.id, dto.eav_field, dto."key", eto.entity_type
 		   union all
-		   select a.id, e.id version_id, null, null
+		   select a.id, e.id version_id, null, null, '-ENUM-'
 			   from meta.attribute a
 			   inner join meta.data_type dt on a.type_id = dt.id and dt.key = 'E'
 			   inner join meta.enum e on e.parent_id is null and e.key = a.ref_enum_key
@@ -1889,6 +1915,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 			   when dt.eav_field='i' then to_jsonb(eav.i)
 			   when dt.eav_field='f' then to_jsonb(eav.f)
 			   when dt.eav_field='t' then to_jsonb(eav.t)
+			   when refs.entity_type = 'PHYS' then pr.attr_value
 			   when dt.key ='R' and refs.eav_field='s' then to_jsonb(reav.s)
 			   when dt.key ='R' and refs.key='B' then to_jsonb(reav.i=1)
 			   when dt.key ='R' and refs.eav_field='i' then to_jsonb(reav.i)
@@ -1921,9 +1948,10 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 		   ) "data",
 		   nullif(jsonb_strip_nulls(jsonb_object_agg(atr.name,
 		   case
+			 when refs.entity_type = 'PHYS' then pr.ref_key
 			 when dt.key ='R' then to_jsonb(geav.guid)
 			 when dt.key ='E' then to_jsonb(enm.key)
-			 when dt.key ='M' then to_jsonb(array_to_json(eav.s::uuid[]))
+			 when dt.key ='M' then to_jsonb(array_to_json(eav.s::uuid[]))			 
 		   end
 		   )), '{}'::jsonb) refs,
 		   cla.guid class_guid
@@ -1939,6 +1967,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 		  left join  data.row geav on geav.id = reav.id
 		  left join  meta.enum enm on dt.key = 'E' and enm.parent_id = refs.version_id and enm.key = eav.s
 		  left join  meta.class cla on cla.id = r.class_id
+		  left join  data.sheet_ext_references(v_sheet.version_id) pr on pr.row_id = r.id and pr.attr_id = atr.id
 		  where v.id = v_sheet.version_id and atr."name" = any(v_sheet.fields)
 		  group by r.guid, fltr.npp, cla.guid, r.id
 		  order by fltr.npp
@@ -1982,7 +2011,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
-$data_sheet_get__2026_08_04$;
+$data_sheet_get__2026_09_01$;
 
 
 create function data.filter_query_get(f_params jsonb)
@@ -2264,7 +2293,7 @@ $data_filter_part_get__2026_08_04$;
 create function meta.sheet_set_pg(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set_pg__2026_08_25$
+AS $meta_sheet_set_pg__2026_09_03$
 declare
   v_sheet record;
   v_attr record;
@@ -2275,7 +2304,7 @@ declare
 begin
   
   select pt.guid, pt.oid, pt.name, pt.id, null::bigint version_id,
-  	a.attname as key_field,	a."key_type"
+  	a.attname as key_field,	a."key_type", a.int_key
   into v_sheet 
   from meta.pg_table pt
   inner join (
@@ -2283,22 +2312,25 @@ begin
 	  select oid
 	  from meta.pg_table t
 	  where t.guid = (f_params->>'guid')::uuid or ((f_params->>'guid') is null and t.name = (f_params->>'table'))
+	),
+	kf as (
+	  select case when t.typcategory='N' then 'N' else 'G' end "key_type",
+		c.oid, a.attname, cn.contype,
+		pg_get_expr(d.adbin, d.adrelid) is not null key_gen
+	  from pg_catalog.pg_class c 
+	  join pt0 on pt0.oid = c.oid
+	  join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum>0
+	  join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
+	  join pg_catalog.pg_type t on t.oid = a.atttypid and (t.typcategory = 'N' or t.typname='uuid') and a.attnotnull
+	  join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+	  join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
+	  and cn.contype in ('u','p')
 	)
-	select case when t.typcategory='N' then 'N' else 'G' end "key_type",
-	  c.oid, a.attname, cn.contype,
-	  pg_get_expr(d.adbin, d.adrelid) is not null key_gen
-	from pg_catalog.pg_class c 
-	join pt0 on pt0.oid = c.oid
-	join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum>0
-	join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
-	join pg_catalog.pg_type t on t.oid = a.atttypid and (t.typcategory = 'N' or t.typname='uuid') and a.attnotnull
-	join pg_catalog.pg_namespace n on c.relnamespace = n.oid
-	join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
-	and cn.contype in ('u','p')
-	union all
-	select null, pt0.oid, null, null, null
-	from pt0
-	order by 1 nulls last limit 1
+	
+	  select pt0.oid, kf.key_type, kf.attname, kf.contype, kf.key_gen, kti.attname int_key
+	  from pt0
+	  left join (select * from kf order by kf.key_type limit 1) kf on true
+	  left join kf kti on kti.key_type='N'
   ) a on a.oid = pt.oid limit 1;
 
   if v_sheet.oid is null then
@@ -2344,6 +2376,7 @@ begin
 		a.attnotnull as is_not_null,
 		(cn.contype = 'u') is_unique,
 		a.attname = v_sheet.key_field is_primary_key,
+		a.attname = v_sheet.int_key is_int_key,
 		pg_get_expr(d.adbin, d.adrelid) as "default"
 	from pg_catalog.pg_attribute a
 	inner join pg_catalog.pg_type t on t.oid = a.atttypid
@@ -2379,6 +2412,8 @@ begin
 	end if;
 	if v_attr.is_primary_key and v_type in ('I','G') then
 		v_flags = meta.enmum_ids_set('attr_flags','PK', true, v_flags);
+	elseif v_attr.is_int_key and v_type = 'I' then
+		v_flags = meta.enmum_ids_set('attr_flags','IPK', true, v_flags);
 	end if;
 	if v_sheet.key_field is null or (v_attr.typcategory='N' and v_attr."default" like 'nextval(%') then
 		v_flags = meta.enmum_ids_set('attr_flags','RO', true, v_flags);
@@ -2392,10 +2427,12 @@ begin
 	;
   end loop;
   
-  /* добавляем таблицы, которых не хватает для внешних ссылок */  
+  
+  /* добавляем таблицы, которых не хватает для внешних ссылок и строим ссылки */  
   for v_attr in
   	select rnm.nspname||'.'|| rcl.relname need_table, null::bigint to_table_id,
-		a.name from_col, a.id from_col_id, null::bigint to_col_id, ref_t.id ref_t_id
+		a.name from_col, a.id from_col_id, null::bigint to_col_id, ref_t.id ref_t_id,
+		(pgt2.id is null) is_new, pgt2.guid ref_guid
 	from meta.pg_table pgt
 	inner join meta.attribute a on a.entity_id = pgt.id 
 	inner join meta.data_type t on t.id = a.type_id and t.key='I'
@@ -2406,21 +2443,24 @@ begin
 	inner join pg_catalog.pg_attribute rat on rat.attrelid =  rcl.oid and rat.attnum = any(cn.confkey)
 	inner join meta.data_type ref_t on ref_t.key = 'R'
 	left join meta.pg_table pgt2 on pgt2.oid = rcl.oid
-	where pgt2.id is null and pgt.id = v_sheet.id
+	where pgt.id = v_sheet.id
   loop
-    j_tmp = meta.sheet_set(jsonb_build_object('table_name', v_attr.need_table));
-	if j_tmp ? 'error' then
-		return j_tmp;
+    
+	if v_attr.is_new then
+	  j_tmp = meta.sheet_set(jsonb_build_object('table_name', v_attr.need_table));
+	  if j_tmp ? 'error' then
+		  return j_tmp;
+	  end if;
 	end if;
 	
 	select e.id into v_attr.to_table_id
-	from meta.entity e where e.guid = (j_tmp->>'guid')::uuid;
+	from meta.entity e where e.guid = v_attr.ref_guid;
 	
 	/* Поиск  именующего атрибута */
 	select x.id into v_attr.to_col_id from (	  
 	  select x.n, a.id
 	  from meta.attribute a
-	  left join (
+	  inner join (
 		select 'title' nm, 1 n
 		union all select * from (values
 		  ('name', 2),
@@ -2438,8 +2478,11 @@ begin
 	  select (row_number() over(order by a.id))+200, a.id
 	  from meta.attribute a
 	  inner join meta.data_type t on a.type_id = t.id
-	  where a.entity_id = v_attr.to_table_id	
-	) x order by 1 limit 1;
+	  where a.entity_id = v_attr.to_table_id
+	  order by 1 limit 1
+	) x;
+	
+	raise notice '%', row_to_json(v_attr);
 	
 	if v_attr.to_col_id is null then
 	  return jsonb_build_object('error', format('Для атрибута-ссылки %s не найдено какое значение вывести', v_attr.from_col));
@@ -2482,7 +2525,7 @@ begin
 
   return jsonb_build_object('guid', v_sheet.guid, 'table_name', v_sheet.name);
 end
-$meta_sheet_set_pg__2026_08_25$;
+$meta_sheet_set_pg__2026_09_03$;
 
 
 create function meta.int2guid(x bigint)
@@ -2502,7 +2545,7 @@ $meta_int2guid__2026_08_10$;
 create function data.sheet_get_pg(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_get_pg__2026_08_04$
+AS $data_sheet_get_pg__2026_08_27$
 declare
    v_table record;
    v_fld record;
@@ -2510,6 +2553,9 @@ declare
    v_query text='';
    v_debug boolean;
    v_ret jsonb;
+   c_join smallint=0;
+   v_join text='';
+   v_refs text='';
 begin
    select quote_ident(n.nspname)||'.'||quote_ident(c.relname) "name", t.oid, t.id, v.guid version_guid, e.guid
    into v_table
@@ -2527,12 +2573,19 @@ begin
    v_debug = coalesce((f_params->>'debug')::boolean, false);
 
    for v_fld in
-   	 select a.name, t.key as type_code, pk.id = any(a.flags) is_key
+   	 select a.name, t.key as type_code, pk.id = any(a.flags) is_key, quote_ident(ns.nspname)||'.'||quote_ident(cl.relname) ref_table, 
+	 	quote_ident(ra.name) ref_attr, quote_ident(rk.attname) ref_key
 	 from meta.attribute a
 	 inner join meta.enum pkt on pkt.parent_id is null and pkt.key = 'attr_flags'
 	 inner join meta.enum pk on pk.parent_id = pkt.id and pk.key = 'PK'
 	 inner join meta.data_type t on t.id = a.type_id
+	 left join meta.attribute ra on ra.id = a.ref_attribute_id
+	 left join meta.pg_table rt on rt.id = ra.entity_id
+	 left join pg_catalog.pg_class cl on cl.oid = rt.oid
+	 left join pg_catalog.pg_namespace ns on ns.oid = cl.relnamespace
 	 left join jsonb_array_elements_text(f_params->'fields') f on f=a.name
+	 left join pg_catalog.pg_constraint cn on cn.contype = 'p' and cn.conrelid = rt.oid
+	 left join pg_catalog.pg_attribute rk on rk.attrelid = rt.oid and rk.attnum = any(cn.conkey)
 	 where a.entity_id = v_table.id and (
 	   not(f_params ? 'fields') or
 	   (f is not null) or
@@ -2549,8 +2602,18 @@ begin
 	 	v_query = v_query||', ';
 	 end if;
 
+	 if v_fld.type_code = 'R' then
+	 	c_join = c_join + 1;
+		v_join = format($q$%s
+		left join %s t%s on t%s.%s = t.%s $q$, v_join, v_fld.ref_table, c_join, c_join, v_fld.ref_key, v_fld.name);
+		
+		v_refs = format($q$%s '%s', meta.int2guid(t.%s),$q$, v_refs, v_fld.name, quote_ident(v_fld.name));
+	 end if;
+	 
 	 if v_debug then
 	 	v_query = v_query||'t.'||quote_ident(v_fld.name);
+	 elseif v_fld.type_code = 'R' then
+	 	v_query = format($q$%s '%s', t%s.%s$q$, v_query, v_fld.name, c_join, quote_ident(v_fld.ref_attr) );
 	 else
 	 	v_query = format($q$%s '%s', t.%s$q$, v_query, v_fld.name, quote_ident(v_fld.name));
 	 end if;
@@ -2569,8 +2632,18 @@ begin
    	  v_query = format($q$select %s row_number() over(%s) as "ROW_NUMBER", %s
 from %s t $q$, v_tmp, v_ret->>'order', v_query, v_table."name");
    else
-      v_query = format($q$select %s as guid, row_number() over(%s) npp, jsonb_build_object(%s) "data"
-from %s t $q$, v_tmp, v_ret->>'order', v_query, v_table."name");
+   	  if c_join > 0 then
+	  	v_refs = left(v_refs, length(v_refs) - 1);
+		v_refs = ',jsonb_build_object('||v_refs||') "references"';
+	  else
+	    v_refs = '';
+	  end if;
+      v_query = format($q$select %s as guid, row_number() over(%s) npp, jsonb_build_object(%s) "data"%s
+from %s t $q$, v_tmp, v_ret->>'order', v_query, v_refs, v_table."name");
+   end if;
+   
+   if c_join > 0 and not v_debug then
+   	  v_query = v_query||v_join;
    end if;
 
    if coalesce(v_ret->>'where','')!='' then
@@ -2581,12 +2654,13 @@ where $q$||(v_ret->>'where');
    if coalesce(v_ret->>'order','')!='' then
    	 v_query = v_query||$q$
 $q$||(v_ret->>'order');
-   end if;
-
+   end if; 	
+   	
    if v_debug then
    	 return jsonb_build_object('query', v_query);
    else
    	 v_query = 'select array_to_json(array_agg(row_to_json(x)))::jsonb from('||v_query||') x';
+	 raise notice '%', v_query;
    	 execute v_query into v_ret;
    end if;
 
@@ -2596,7 +2670,7 @@ $q$||(v_ret->>'order');
 	 'rows', v_ret
    );
 end
-$data_sheet_get_pg__2026_08_04$;
+$data_sheet_get_pg__2026_08_27$;
 
 create function data.sheet_set_pg(f_params jsonb)
  RETURNS jsonb
@@ -2718,3 +2792,45 @@ values
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end
 $data_sheet_set_pg__2026_08_11$;
+
+create function data.sheet_ext_references(f_version_id bigint, f_fields character varying[] DEFAULT NULL::character varying[])
+ RETURNS TABLE(row_id bigint, attr_id bigint, attr_value jsonb, ref_key jsonb)
+ LANGUAGE plpgsql
+AS $data_sheet_ext_references__2026_09_03$
+declare
+ f_def record;
+ f_qry text = '';
+ j_cnt smallint = 0;
+begin
+    for f_def in
+		select a.id, quote_ident(nm.nspname)||'.'||quote_ident(cl.relname) ext_table, 
+			   quote_ident(pg.key_name) key_name, quote_ident(pg.int_key) int_key,
+			   quote_ident(ra.name) val_name, quote_ident(rat.key) val_type
+		  from meta.version v
+		  inner join meta.entity e on e.id = v.entity_id and v.id = f_version_id
+		  inner join meta.attribute a on a.entity_id = e.id and (f_fields is null or a.name = any(f_fields))
+		  inner join meta.attribute ra on ra.id = a.ref_attribute_id
+		  inner join meta.pg_table pg on pg.id = ra.entity_id
+		  inner join pg_catalog.pg_class cl on cl.oid = pg.oid
+		  inner join pg_catalog.pg_namespace nm on nm.oid = cl.relnamespace
+		  inner join meta.data_type rat on rat.id = ra.type_id
+	loop
+		j_cnt = j_cnt + 1;
+		if j_cnt > 1 then
+			f_qry = f_qry||$q$ 
+		union 
+$q$;
+		end if;
+
+        f_qry = f_qry||format($q$select e.id::bigint row_id, %s::bigint attr_id, to_jsonb(t.%s) attr_value, to_jsonb(meta.int2guid(e.i)) ref_key
+		  from data.eav_%s e inner join %s t on t.%s = e.i $q$, 
+		  f_def.id, f_def.val_name, f_version_id, f_def.ext_table, case when f_def.int_key is not null then f_def.int_key else f_def.key_name end);
+	end loop;
+	
+	if f_qry = '' then
+		return query select null::bigint row_id, null::bigint attr_id, null::jsonb attr_value where false;
+		return;
+	end if;
+	return query execute f_qry;
+end
+$data_sheet_ext_references__2026_09_03$;

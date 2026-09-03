@@ -494,11 +494,14 @@ function runClick() {
 
         notify.innerHTML = result.result.notice
         if (Object.hasOwn(result.result, "line") && !ctx) {
-            const mark = editor.markText(
-              { line: result.result.line - 1, ch: 0 }, // начало выделения {строка, символ в строке}
-              { line: result.result.line - 1, ch: editor.getLine(result.result.line - 1).length }, // конец выделения
-              { className: 'cm-error-line' })
-            lineMarks.push(mark)
+            let bad_line = editor.getLine(result.result.line - 1)
+            if(bad_line!== undefined) {
+                const mark = editor.markText(
+                  { line: result.result.line - 1, ch: 0 }, // начало выделения {строка, символ в строке}
+                  { line: result.result.line - 1, ch: editor.getLine(bad_line - 1).length }, // конец выделения
+                  { className: 'cm-error-line' })
+                lineMarks.push(mark)
+            }
         }
         if ("columns" in result.result) {
             w2ui.previewToolbar.enable("data")

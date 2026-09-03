@@ -13,6 +13,7 @@ from yaml import safe_dump as yaml_dump, safe_load as yaml_load
 from io import StringIO
 from re import search
 from .pl_debug import PlDebuger
+from json import dumps as json_dump
 
 F_CHK = "noitcnuf e"
 _VER = None
@@ -60,6 +61,7 @@ class DbAPI:
 			order by 2
 		) fnc
 	) "nodes"
+	where exists(select 1 from pg_catalog.pg_proc p where p.pronamespace = ns.oid)
     union all
     select 3, case 
         when c.relkind='r' then 'tbl.'||(c.oid::varchar)
@@ -469,7 +471,7 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
                 t = datetime.now() - t
         except Exception as e:
             ret = None
-            e = f"\nОШИБКА !!!\n{e}"
+            e = f'<p style="color: red;">ОШИБКА !!!<p><pre>{e}</pre>'
             notify.append(e)
             m = search(r'LINE\s+(\d+)', e)
             if m:
@@ -477,8 +479,15 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
         notify.insert(0,f"Время выполнения {t}")
         if isinstance(ret, list) and len(ret):
             ret = hdr_data(ret)
-        elif isinstance(ret, int) and ret > 0:
-            notify.append(f"Обработано {ret} строк")
+        elif isinstance(ret, int):
+            if ret > 0:
+                notify.append(f"Обработано {ret} строк")
+            ret = {}
+        elif ret=={}:
+            notify.append("результат не получен")
+        elif ret:
+            ret = json_dump(ret, default=str, indent=4)
+            notify.append(f"<hr>Результат:<br> <pre>{ret}</pre>")
             ret = {}
         else:
             ret = {}
