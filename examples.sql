@@ -174,6 +174,13 @@ select meta.sheet_set('{
         "title": "мечта",
         "reference": "0000a1d1-6442-4321-ab36-08af0f000000",
         "reference_column": "name"
+    },
+    {
+        "name": "rank",
+        "type": "R",
+        "title": "Звание",
+        "reference": "0000a1d1-6442-4321-abde-fef732000000",
+        "reference_column": "rank_name"
     }
   ]
 }');

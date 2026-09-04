@@ -310,6 +310,10 @@ function showTab(tab) {
 function fieldPopup(text, title="Значение:") {
     text = String(text)
     text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"')
+    try {
+       const j = JSON.parse(text)
+       text = JSON.stringify(j, null, 2)
+    } catch (error) {}
     w2popup.open({
         title: title,
         body: '<div style="padding:10px"><pre>' + text + '</pre></div>',
@@ -498,7 +502,7 @@ function runClick() {
             if(bad_line!== undefined) {
                 const mark = editor.markText(
                   { line: result.result.line - 1, ch: 0 }, // начало выделения {строка, символ в строке}
-                  { line: result.result.line - 1, ch: editor.getLine(bad_line - 1).length }, // конец выделения
+                  { line: result.result.line - 1, ch: bad_line.length }, // конец выделения
                   { className: 'cm-error-line' })
                 lineMarks.push(mark)
             }

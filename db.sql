@@ -2796,7 +2796,7 @@ $data_sheet_set_pg__2026_08_11$;
 create function data.sheet_ext_references(f_version_id bigint, f_fields character varying[] DEFAULT NULL::character varying[])
  RETURNS TABLE(row_id bigint, attr_id bigint, attr_value jsonb, ref_key jsonb)
  LANGUAGE plpgsql
-AS $data_sheet_ext_references__2026_09_03$
+AS $data_sheet_ext_references__2026_09_04$
 declare
  f_def record;
  f_qry text = '';
@@ -2804,13 +2804,13 @@ declare
 begin
     for f_def in
 		select a.id, quote_ident(nm.nspname)||'.'||quote_ident(cl.relname) ext_table, 
-			   quote_ident(pg.key_name) key_name, quote_ident(pg.int_key) int_key,
+			   quote_ident(pg.key_name) key_name, quote_ident(pg.int_key) int_key, pg.key_type,
 			   quote_ident(ra.name) val_name, quote_ident(rat.key) val_type
 		  from meta.version v
 		  inner join meta.entity e on e.id = v.entity_id and v.id = f_version_id
 		  inner join meta.attribute a on a.entity_id = e.id and (f_fields is null or a.name = any(f_fields))
 		  inner join meta.attribute ra on ra.id = a.ref_attribute_id
-		  inner join meta.pg_table pg on pg.id = ra.entity_id
+		  inner join meta.pg_table pg on pg.id = ra.entity_id		 
 		  inner join pg_catalog.pg_class cl on cl.oid = pg.oid
 		  inner join pg_catalog.pg_namespace nm on nm.oid = cl.relnamespace
 		  inner join meta.data_type rat on rat.id = ra.type_id
@@ -2821,10 +2821,15 @@ begin
 		union 
 $q$;
 		end if;
-
-        f_qry = f_qry||format($q$select e.id::bigint row_id, %s::bigint attr_id, to_jsonb(t.%s) attr_value, to_jsonb(meta.int2guid(e.i)) ref_key
-		  from data.eav_%s e inner join %s t on t.%s = e.i $q$, 
-		  f_def.id, f_def.val_name, f_version_id, f_def.ext_table, case when f_def.int_key is not null then f_def.int_key else f_def.key_name end);
+		if f_def.key_type = 'I' or f_def.int_key is not null then
+		  f_qry = f_qry||format($q$select e.id::bigint row_id, %s::bigint attr_id, to_jsonb(t.%s) attr_value, to_jsonb(meta.int2guid(e.i)) ref_key
+			from data.eav_%s e inner join %s t on t.%s = e.i and e.attribute_id = %s $q$, 
+			f_def.id, f_def.val_name, f_version_id, f_def.ext_table, coalesce(f_def.int_key,f_def.key_name), f_def.id);
+		else
+		  f_qry = f_qry||format($q$select e.id::bigint row_id, %s::bigint attr_id, to_jsonb(t.%s) attr_value, to_jsonb(e.s) ref_key
+			from data.eav_%s e inner join %s t on t.%s = e.s::uuid and e.attribute_id = %s $q$, 
+			f_def.id, f_def.val_name, f_version_id, f_def.ext_table, f_def.key_name, f_def.id);
+		end if;
 	end loop;
 	
 	if f_qry = '' then
@@ -2833,4 +2838,4 @@ $q$;
 	end if;
 	return query execute f_qry;
 end
-$data_sheet_ext_references__2026_09_03$;
+$data_sheet_ext_references__2026_09_04$;
