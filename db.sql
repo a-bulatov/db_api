@@ -1017,11 +1017,13 @@ $data_version_get_value__2026_06_26$;
 create or replace function data.value_check(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_value_check__2026_08_06$
+AS $data_value_check__2026_09_07$
 declare
  fld_def record;
  tmp_rec record;
  ret jsonb;
+ f_val varchar;
+ qry varchar;
 begin
  /*
   Проверка значения атрибута
@@ -1059,10 +1061,15 @@ begin
 		(f_params->>'row_id')::bigint row_id,
 		(f_params->>'type') "type",
 		(f_params->>'referencе') as ref,
+		(f_params->>'ref_entity_type') as ref_entity_type,
 		(f_params->>'ref_attribute') "ref_attribute",
 		(f_params->>'entity_id')::bigint entity_id,
 		(f_params->>'version_id')::bigint version_id,
-		(f_params->>'entity_type') entity_type
+		(f_params->>'entity_type') entity_type,
+		(f_params->>'ref_table') ref_table, /* Для ссылок на физические таблицы */
+		(f_params->>'key_type') key_type,
+		(f_params->>'key_name') key_name,
+		(f_params->>'int_key') int_key
   into fld_def;
 
 
@@ -1115,7 +1122,25 @@ begin
 	  return jsonb_build_object('error', format('Значение %s нарушает уникальность значений атрибута %s [при проверке значения]', fld_def.value, fld_def.name));
   end;
 
-  if fld_def.type in ('R','M','r','H') then
+  if fld_def.type = 'R'	and  fld_def.ref_entity_type='PHYS' then
+    f_val = f_params->>'value';
+    if fld_def.key_type = 'I' or fld_def.int_key is not null then
+	  f_val = ('x' ||left(f_val, 4)||right(f_val,12))::bit(64)::bigint::varchar;
+	  qry = format($q$select to_jsonb(t.%s) attr_value
+			from %s t where t.%s = %s $q$, 
+			fld_def.ref_attribute, fld_def.ref_table, coalesce(fld_def.int_key, fld_def.key_name), f_val);
+	else
+	  qry = format($q$select to_jsonb(t.%s) attr_value
+			from %s t where t.%s = %L::uuid $q$,
+			fld_def.ref_attribute, fld_def.ref_table, fld_def.key_name, f_val);
+	end if;
+	raise notice 'QRY %', qry;
+	execute qry into ret;
+	if ret is null then
+		return jsonb_build_object('error', format('В таблице %ыs найдено значение %s [при проверке значения]', fld_def.ref_table, f_val));
+	end if;
+	return jsonb_build_object('value', ret, 'reference', (f_params->>'value'), 'type', fld_def.type);
+  elseif fld_def.type in ('R','M','r','H') then
   	if fld_def.type = 'M' and jsonb_typeof(f_params->'value')!='array' then
 		return jsonb_build_object('error', format('Значение множественной ссылки %s должно быть задано массивом [при проверке значения]',fld_def.name));
 	end if;
@@ -1159,7 +1184,7 @@ begin
 
   return ret||jsonb_build_object('type', fld_def.type);
 end
-$data_value_check__2026_08_06$;
+$data_value_check__2026_09_07$;
 
 create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
@@ -1419,7 +1444,7 @@ $data_sheet_set__2026_09_03$;
 create function data.sheet_set_rvt(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set_rvt__2026_08_21$
+AS $data_sheet_set_rvt__2026_09_07$
 declare
    v_row record;
    v_sheet record;
@@ -1518,21 +1543,32 @@ begin
 		end if;
 
 		for v_def in
-			select v.value->>'name' fld_name, t.key type_key,
+			select v.value->>'name' fld_name, 
+			  t.key type_key,
 			  v_row.new_data->>(v.value->>'name') "value",
-			  a.ref_enum_key, 
+			  case when t.key = 'E'
+			  	then a.ref_enum_key
+				else re.guid::varchar
+			  end ref_enum_key,
+			  re.entity_type,
+			  pg.key_type,
+			  pg.key_name,
+			  pg.int_key,
+			  pg.schema_name||'.'||pg.table_name ref_table,
 			  a.id, 
 			  a.name col_name,
 			  ra.name ref_attribute,
 			  nn.id is null as is_nullable,
 			  uk.id is not null as is_unique
             from jsonb_array_elements(v_cols->'columns') v
-            inner join meta.data_type t on t.id = (v.value->>'type_id')::bigint
 			inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
-			left join meta.attribute a on a.entity_id = v_sheet.id and a."name"=(v.value->>'name')
+			inner join meta.attribute a on a.entity_id = v_sheet.id and a."name"=(v.value->>'name')
+			inner join meta.data_type t on t.id = a.type_id
 			left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(a.flags) and nn.key = 'NN'
 			left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(a.flags) and uk.key = 'UQ'
 			left join meta.attribute ra on ra.id = a.ref_attribute_id
+			left join meta.entity re on re.id = ra.entity_id
+			left join meta.pg_table pg on pg.id = re.id
 			where v_row.new_data ? (v.value->>'name')
 			order by a.id
 		loop
@@ -1540,7 +1576,12 @@ begin
               'type', v_def.type_key,
               'value', v_def.value,
               'referencе', v_def.ref_enum_key,
+			  'ref_entity_type', v_def.entity_type,
 			  'ref_attribute', v_def.ref_attribute,
+			  'ref_table', v_def.ref_table,
+			  'key_type', v_def.key_type,
+			  'key_name', v_def.key_name,
+			  'int_key', v_def.int_key,
               'is_unique', v_def.is_unique,
               'is_nullable', v_def.is_nullable,
               'guid', v_sheet.guid,
@@ -1585,7 +1626,7 @@ begin
 
     return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end
-$data_sheet_set_rvt__2026_08_21$;
+$data_sheet_set_rvt__2026_09_07$;
 
 
 create function data.filter(f_version_id bigint, f_params jsonb)

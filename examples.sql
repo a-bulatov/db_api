@@ -194,4 +194,46 @@ select data.sheet_set('{
    },
    "guid": "82e86b77-6d47-45ee-a10c-9eff7e134314"
  }]
-}')
+}');
+
+select meta.sheet_set('{
+    "guid": "f038b9c2-e7a9-44a7-9ff9-4812f7a1a816",
+    "title": "ссылка на физику RVT",
+    "columns": [
+        {
+            "name": "title",
+            "type": "S",
+            "title": "title",
+            "is_unique": false,
+            "is_nullable": true
+        },
+        {
+            "name": "user_ref",
+            "type": "R",
+            "title": "user_ref",
+            "is_unique": false,
+            "reference": "0000a1d1-6442-4321-ab8d-0018a2000000",
+            "is_nullable": true,
+            "reference_column": "username"
+        },
+        {
+            "name": "user_dream",
+            "type": "R",
+            "title": "мечта",
+            "is_unique": false,
+            "reference": "0000a1d1-6442-4321-ab36-08af0f000000",
+            "is_nullable": true,
+            "reference_column": "name"
+        },
+        {
+            "name": "rank",
+            "type": "R",
+            "title": "Звание",
+            "is_unique": false,
+            "reference": "0000a1d1-6442-4321-abde-fef732000000",
+            "is_nullable": true,
+            "reference_column": "rank_name"
+        }
+    ],
+    "entity_type": "RVT"
+}');

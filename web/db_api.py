@@ -103,7 +103,7 @@ order by ns.nspname""")
         for schema in nodes:
             if not schema["nodes"]: continue
             for table in schema["nodes"]:
-                if table["icon"] not in ("fa fa-table", "fa-table-columns", "fa fa-table-cells-column-lock"): continue
+                if table["icon"] not in ("fa fa-table", "fa fa-table-columns", "fa fa-table-cells-column-lock"): continue
                 tables[f'{schema["text"]}.{table["text"].rsplit("(",1)[0].strip()}'] = [x["text"] for x in table["nodes"]]
 
 
@@ -376,7 +376,7 @@ truncate table {t['t']} cascade; -- для очистки данных табл�
         where co.contype = 'f' and cl2.oid = $1""", id, ONE)
 
         if d:
-            ret += f"\nНа таблицу {t['t']}  ссылаются следующие другие таблицы:\n"+"\n".join(d)+"\n"
+            ret += f"\nНа таблицу {t['t']}  ссылаются следующие таблицы:\n"+"\n".join(d)+"\n"
 
         d = await env.sql("""select  array_agg(ns.nspname||'.'||dependent_view)
         from pg_catalog.pg_depend d
@@ -468,7 +468,6 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
             async with DB_ENV(notify=notify) as env:
                 t = datetime.now()
                 ret = await env.sql(sql, RAW)
-                t = datetime.now() - t
         except Exception as e:
             ret = None
             e = f'<p style="color: red;">ОШИБКА !!!<p><pre>{e}</pre>'
@@ -476,7 +475,9 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
             m = search(r'LINE\s+(\d+)', e)
             if m:
                 err_line = m.group(1)
-        notify.insert(0,f"Время выполнения {t}")
+        finally:
+            t = datetime.now() - t
+        notify.insert(0,f"Время выполнения {t}<hr>")
         if isinstance(ret, list) and len(ret):
             ret = hdr_data(ret)
         elif isinstance(ret, int):
