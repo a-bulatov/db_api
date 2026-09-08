@@ -175,7 +175,8 @@ from (values
   ('NN', 'Не NULL'),
   ('RO', 'Только чтение'),
   ('PK', 'Ключ физ.таблицы'),
-  ('IPK','Быстрый int ключ физ.таблицы')
+  ('IPK','Быстрый int ключ физ.таблицы'),
+  ('CLS','Ссылка на класс')
 ) x;
 
 
@@ -200,6 +201,8 @@ create table meta.class (
     parent_id bigint references meta.class,
     guid uuid unique default uuid_generate_v4() not null,
     title varchar(250) unique not null,
+    description text,
+    visible boolean not null default true,
     entity_id bigint not null references meta.entity(id)
 );
 comment on table meta.class is 'классы (онтологии)';
@@ -207,6 +210,20 @@ comment on column meta.class.parent_id is 'ссылка на родительс�
 comment on column meta.class.guid is 'глобальный идентификатор класса';
 comment on column meta.class.title is 'наименование класса для отображения';
 comment on column meta.class.entity_id is 'таблица, в которой лежат данные класса (одна на всю иерархию)';
+
+create table meta.class_attr (
+	class_id bigint not null references meta.class(id),
+    attribute_id bigint not null references meta.attribute(id),
+  	visible boolean not null default true,
+    constraint class_attr_pk primary key (class_id, attribute_id)
+);
+
+comment on table meta.class_attr is 'атрибуты таблицы, которые должны быть введены или переопределены в данном классе';
+comment on column meta.class_attr.class_id is 'класс к которому относится атрибут';
+comment on column meta.class_attr.attribute_id is 'атрибут';
+comment on column meta.class_attr.visible is 'false если атрибут определен в родительском классе, но тут его надо спрятать';
+
+
 
 create table meta."version" (
 	id bigserial not null primary key,
@@ -2334,7 +2351,7 @@ $data_filter_part_get__2026_08_04$;
 create function meta.sheet_set_pg(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set_pg__2026_09_03$
+AS $meta_sheet_set_pg__2026_09_08$
 declare
   v_sheet record;
   v_attr record;
@@ -2471,7 +2488,7 @@ begin
   
   /* добавляем таблицы, которых не хватает для внешних ссылок и строим ссылки */  
   for v_attr in
-  	select rnm.nspname||'.'|| rcl.relname need_table, null::bigint to_table_id,
+  	select pgt2.name need_table, null::bigint to_table_id,
 		a.name from_col, a.id from_col_id, null::bigint to_col_id, ref_t.id ref_t_id,
 		(pgt2.id is null) is_new, pgt2.guid ref_guid
 	from meta.pg_table pgt
@@ -2479,14 +2496,19 @@ begin
 	inner join meta.data_type t on t.id = a.type_id and t.key='I'
 	inner join pg_catalog.pg_attribute pa on pa.attname = a.name and pa.attrelid = pgt.oid
 	inner join pg_catalog.pg_constraint cn on cn.contype = 'f'  and cn.conrelid = pgt.oid and pa.attnum  = any(cn.conkey) and array_length(cn.conkey,1)=1
-	inner join pg_catalog.pg_class rcl on rcl.oid = cn.confrelid
-	inner join pg_catalog.pg_namespace rnm on rnm.oid = rcl.relnamespace
-	inner join pg_catalog.pg_attribute rat on rat.attrelid =  rcl.oid and rat.attnum = any(cn.confkey)
+	inner join pg_catalog.pg_attribute rat on rat.attrelid =  cn.confrelid and rat.attnum = any(cn.confkey)
 	inner join meta.data_type ref_t on ref_t.key = 'R'
-	left join meta.pg_table pgt2 on pgt2.oid = rcl.oid
+	left join meta.pg_table pgt2 on pgt2.oid = cn.confrelid
 	where pgt.id = v_sheet.id
   loop
     
+	if v_attr.need_table = 'meta.class' then
+		update meta.attribute set
+			flags = meta.enmum_ids_set('attr_flags','CLS', true, flags)
+		where id = v_attr.from_col_id;
+		continue;
+	end if;
+	
 	if v_attr.is_new then
 	  j_tmp = meta.sheet_set(jsonb_build_object('table_name', v_attr.need_table));
 	  if j_tmp ? 'error' then
@@ -2566,7 +2588,7 @@ begin
 
   return jsonb_build_object('guid', v_sheet.guid, 'table_name', v_sheet.name);
 end
-$meta_sheet_set_pg__2026_09_03$;
+$meta_sheet_set_pg__2026_09_08$;
 
 
 create function meta.int2guid(x bigint)
