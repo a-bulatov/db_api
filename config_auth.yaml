@@ -1,0 +1,12 @@
+defaults:
+  script: auth.sql
+
+logging:
+  level: INFO
+
+database: postgresql://localhost:5432/auth?user=postgres&password=postgres
+
+API:
+  help:
+    type: self
+    function: api_help

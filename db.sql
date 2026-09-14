@@ -212,8 +212,9 @@ comment on column meta.class.title is 'наименование класса д�
 comment on column meta.class.entity_id is 'таблица, в которой лежат данные класса (одна на всю иерархию)';
 
 create table meta.class_attr (
-	class_id bigint not null references meta.class(id),
+	class_id bigint not null references meta.class(id) on delete cascade,
     attribute_id bigint not null references meta.attribute(id),
+    title varchar(150),
   	visible boolean not null default true,
     constraint class_attr_pk primary key (class_id, attribute_id)
 );
@@ -222,7 +223,6 @@ comment on table meta.class_attr is 'атрибуты таблицы, котор
 comment on column meta.class_attr.class_id is 'класс к которому относится атрибут';
 comment on column meta.class_attr.attribute_id is 'атрибут';
 comment on column meta.class_attr.visible is 'false если атрибут определен в родительском классе, но тут его надо спрятать';
-
 
 
 create table meta."version" (
@@ -2902,3 +2902,194 @@ $q$;
 	return query execute f_qry;
 end
 $data_sheet_ext_references__2026_09_04$;
+
+create function meta.class_set(f_params jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS 
+$meta_class_set__2026_09_14$
+declare
+    v_class record;
+    v_attr record;
+    v_json jsonb;
+begin
+    select q.guid, cl.id, (cl.id is null) is_new, pcl.id parent_id,         
+         coalesce(pcl.entity_id, e.id) entity_id, null::uuid entity_guid,
+         coalesce(f_params->>'title', cl.title) title,         
+         case when (f_params->>'attributes' is null or jsonb_typeof(f_params->'attributes')!='array' or jsonb_array_length(f_params->'attributes')=0) 
+             then null::jsonb
+            else (f_params->'attributes')
+         end attrs,
+         coalesce((f_params->>'visible')::boolean, cl.visible, true) visible,
+         coalesce((f_params->>'description'), cl.description) "description"
+    from (select coalesce((f_params->>'guid')::uuid, uuid_generate_v4()) guid) q
+    left join meta.class cl on cl.guid = q.guid
+    left join meta.class pcl on pcl.id = cl.parent_id or (cl.id is null and pcl.guid = (f_params->>'parent_guid')::uuid)
+    left join meta.entity e on e.id = cl.entity_id or (cl.id is null and e.guid = (f_params->>'table_guid')::uuid)
+    into v_class;
+    
+    if trim(coalesce(v_class.title,''))='' then
+        return jsonb_build_object('error', 'Название класса должно быть заполнено');
+    elseif v_class.is_new and v_class.entity_id is null and v_class.parent_id is null and v_class.attrs is null then
+        return jsonb_build_object('error', 'Для нового класса не определены атрибуты');
+    elseif v_class.is_new and v_class.entity_id is null and v_class.parent_id is null then
+        v_json = jsonb_build_object('title', v_class.title, 'columns', v_class.attrs);
+        
+        v_json = meta.sheet_set(v_json);
+        if v_json ? 'error' then return v_json; end if;
+        v_class.entity_guid = (v_json->>'guid')::uuid;
+        
+        select id into v_class.entity_id
+        from meta.entity where guid = v_class.entity_guid;
+    elseif not v_class.is_new then
+        update meta.class set 
+            title = v_class.title,
+            description = v_class.description
+        where id = v_class.id;
+    end if;
+    
+    if v_class.entity_guid is null then
+        select guid 
+        into v_class.entity_guid
+        from meta.entity 
+        where id = v_class.entity_id;
+    end if;
+    
+    if v_class.is_new then
+        insert into meta.class(guid, parent_id, title, entity_id, description, visible)
+        values(v_class.guid, v_class.parent_id, v_class.title, v_class.entity_id, v_class.description, v_class.visible)
+        returning id into v_class.id;
+        if v_class.attrs is null and v_class.parent_id is null then
+            /* атрибуты явно не заданы. присвоить атрибуты таблицы с данными */
+            insert into meta.class_attr(class_id, attribute_id, title)
+            select v_class.id, a.id, a.title
+            from meta.attribute a
+            where a.entity_id = v_class.entity_id;
+        end if;
+    end if;
+    
+    if v_class.attrs is not null then for v_attr in
+        select (ja.value->>'name') "name", a.id, coalesce(ja.value->>'title', ca.title, a.title) title,
+            coalesce((ja.value->>'delete')::boolean, not ca.visible, false) to_delete, ja.value,
+            (ca.class_id is not null) in_def
+        from jsonb_array_elements(v_class.attrs) ja
+        left join meta.attribute a on a.entity_id = v_class.entity_id and a.name = (ja.value->>'name')
+        left join meta.class_attr ca on ca.attribute_id = a.id and ca.class_id = v_class.id
+    loop
+        if v_attr.to_delete and v_attr.id is null then
+            continue;
+        elseif v_attr.id is null then
+            v_json = jsonb_build_object(
+              'guid', v_class.entity_guid,
+              'columns', jsonb_build_array(v_attr.value)
+            );
+            v_json = meta.sheet_set(v_json);
+            if v_json ? 'error' then return v_json; end if;
+            
+            select a.id 
+            into v_attr.id
+            from meta.attribute a
+            where a.entity_id = v_class.entity_id and a.name = v_attr.name;
+        end if;    
+        
+        insert into meta.class_attr(class_id, attribute_id, visible, title)
+        values(v_class.id, v_attr.id, not v_attr.to_delete, v_attr.title)
+        on conflict(class_id, attribute_id) do update set
+            visible = excluded.visible,
+            title = excluded.title;
+    end loop; end if;
+    
+    return (select jsonb_build_object(
+      'guid', c.guid, 
+      'parent_guid', p.guid,
+      'table_guid', e.guid)
+    from meta.class c
+    left join meta.class p on p.id = c.parent_id
+    left join meta.entity e on e.id = c.entity_id
+    where c.id = v_class.id);
+end;
+$meta_class_set__2026_09_14$;
+
+create function meta.class_get(f_params jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS 
+$meta_class_get__2026_09_14$
+declare
+  v_class record;
+  v_attrs jsonb;
+begin
+    if not(f_params ? 'guid') then
+        return (
+          select array_to_json(array_agg(row_to_json(x)))::jsonb
+          from (
+            select c.guid, p.guid parent_guid, c.title
+            from meta.class c
+            left join meta.class p on p.id = c.parent_id
+          ) x
+        );    
+    end if;
+    
+    select c.id, c.entity_id
+    into v_class
+    from meta.class c
+    where c.guid = (f_params->>'guid')::uuid;
+    
+    if v_class.id is null then
+        return jsonb_build_object('error', format('Класс %s не найден', f_params->'guid'));
+    end if;
+    
+    with attr as (
+        with attr_level as (
+          select ca.class_id, ca.attribute_id, ca.title, ca.visible, cla.level
+          from (
+              with recursive cla as (
+                  select c.id, c.parent_id, 0::int "level" from meta.class c where c.id = v_class.id
+                  union all
+                  select c.id, c.parent_id, cla.level + 1 from meta.class c
+                  inner join cla on c.id = cla.parent_id
+              ) 
+              select * from cla
+          ) cla
+          inner join meta.class_attr ca on ca.class_id = cla.id
+        )
+
+        select ma.id, ma.name, jsonb_strip_nulls(jsonb_build_object(
+            'delete', case when a.visible then null::boolean else true end, 
+            'title', a.title
+          )) defs
+        from (
+          select a.attribute_id, min(a.level) lvl
+          from attr_level a
+          group by a.attribute_id
+        ) agr
+        inner join attr_level a on a.attribute_id = agr.attribute_id and a.level = agr.lvl
+        inner join meta.attribute ma on ma.id = a.attribute_id
+      )
+    /* список атрибутов с with attr */
+    select array_to_json(array_agg(el.value||attr.defs))::jsonb
+    into v_attrs
+    from jsonb_array_elements(meta.sheet_get(jsonb_build_object('guid', (
+      select e.guid 
+      from meta.attribute a
+      inner join meta.entity e on a.entity_id = e.id
+      where a.id = (select id from attr limit 1)
+    )))->'columns') el
+    inner join attr on attr.name = el.value->>'name';
+                                  
+    return (
+        select jsonb_build_object(
+          'guid', c.guid,
+          'parent_guid', p.guid,
+          'table_guid', e.guid,
+          'title', c.title,
+          'description', c.description,
+          'attributes', v_attrs
+        )
+          from meta.class c
+        inner join meta.entity e on e.id = c.entity_id
+        left join meta.class p on c.parent_id = p.id
+          where c.id = v_class.id
+    );
+end
+$meta_class_get__2026_09_14$;

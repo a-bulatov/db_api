@@ -235,7 +235,14 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         return ret
 
     async def function_info(self, env, id):
-        ret = await env.sql("select pg_get_functiondef($1)",id,ONE)
+        x = await env.sql("""
+        select pg_get_functiondef($1) defs,
+        (select d.description from pg_catalog.pg_description d where d.objoid = $1) "description"
+        """,id,ROW, OBJECT)
+        ret = x.defs.strip().replace("\t","    ")
+        if x.description:
+            h = x.defs.split("\n", 1)[0].split("FUNCTION")[1].strip()
+            ret = f"""{ret};\n\ncomment on function {h}\n is '{x.description.replace("'","''")}';"""
         return ret
 
     async def create_table_scripts(self, env, id)->str:
@@ -343,7 +350,8 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
           quote_ident(pns.nspname)||'.'||quote_ident(pn.relname) p,
           rl.rolname own,
           r.reltuples cnt,
-          pg_size_pretty(pg_total_relation_size(r.oid)) sz
+          pg_size_pretty(pg_total_relation_size(r.oid)) sz,
+          obj_description(r.oid) descr
         from pg_catalog.pg_class r
         inner join pg_catalog.pg_namespace n on n.oid = r.relnamespace
         inner join pg_roles rl on r.relowner = rl.oid
@@ -364,6 +372,10 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         else:
             # Обычные таблицы
             ret += await self.create_table_scripts(env, id)
+        if t["descr"]:
+            ret += f"""\n
+comment on table {t["t"]} is '{ t["descr"]}';
+"""
         ret+=f"""\n/*
 drop table {t['t']} cascade; -- для удаленния таблицы со всеми зависимостями\n
 truncate table {t['t']} cascade; -- для очистки данных таблицы со всеми зависимостями\n"""
@@ -529,7 +541,7 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
         ret = await self.do_sql(env, sql=query)
         return ret
 
-    def do_save_fn(self, sql_b64:str, **kwargs):
+    def do_save_fn_old(self, sql_b64:str, **kwargs):
         sql_b64 = b64decode(sql_b64).decode("utf-8").strip()
         if not sql_b64.endswith("$"): return {}
         sql_b64, fname = f'${sql_b64[:-1]}'.rsplit('$', 1)
@@ -578,6 +590,98 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
         data = left_data + fname + "(" + fdefs + x + sql_b64 + x + right_data
         self.do_save_script(data=data)
         return {}
+
+    def do_save_fn(self, sql_b64:str, **kwargs):
+        sql_b64 = b64decode(sql_b64).decode("utf-8").strip()
+        sql_b64 = sql_b64.split('$',2)
+        if len(sql_b64) < 2:
+            return {}
+        fbody = f"${sql_b64[1]}$"
+        fname = sql_b64[0]
+        fbody, sql_b64 = sql_b64[2].split(fbody, 1)
+        fbody = fbody.strip().replace("\t","    ")
+        fname, fdefs = fname.split("(", 1)
+        _, fname = fname.rsplit(" ", 1) # имя функции без create
+
+        fl = Path(Config().defaults["script"])
+        with open(fl, "r") as f:
+            data = f.read()
+        pos = 0
+        while True:
+            x = data.find(fname, pos + 1)
+            if x < 0:
+                pos = None
+                break
+            pos = x
+            x -= 1
+            if data[x] not in "\n\r\t ":
+                continue
+            while data[x] in "\n\r\t ":
+                x -= 1
+            for c in F_CHK:
+                if data[x]==c:
+                    x -= 1
+                else:
+                    break
+                if c == "e":
+                    x = -1
+                    break
+            if x < 0:
+                break
+        if pos is None:
+            # функуция не найдена
+            left_data = f"{data}\n\ncreate function "
+            right_data = ";\n"
+        else:
+            # в pos начало имени фукнкциии
+            left_data = data[:pos]
+            data, right_data = data[pos:].split("$", 1)
+            data, right_data = right_data.split("$", 1)
+            # в data ограничитель строки без $
+            data, right_data = right_data.split(f"${data}$", 1)
+        # в left_data то что должно быть до имени функции, в right_data то что после функции
+        x = f"${fname.replace('.','_')}__{datetime.now().strftime('%Y_%m_%d')}$"
+        right_data = right_data.strip()
+        if len(right_data) > 0 and right_data[0] == ";":
+            right_data = right_data[1:].strip()
+        sql_b64 = sql_b64.strip()
+        if len(sql_b64) > 0 and sql_b64[0] == ";":
+            sql_b64 = sql_b64[1:].strip()
+        if sql_b64[:20].lower()=="comment on function ":
+            right_data = self._add_comment(fname, fdefs, sql_b64, right_data)
+        x = f"\n{x}"
+        data = f"{left_data}{fname}({fdefs}{x}\n{fbody}{x};\n\n{right_data}"
+        self.do_save_script(data=data.strip())
+        return {}
+
+    @staticmethod
+    def _add_comment(fname, fdefs, comment, right_data):
+        fdefs = fdefs.split("\n")[0]
+        fdefs = fdefs.split(")")[0]
+        comment = comment[20:].strip()
+        comment = comment.split("(", 1)
+        if comment[0].strip() != fname: return right_data
+        _, comment = comment[1].strip().split(")", 1)
+        comment = comment.strip()
+        x = comment[:3].upper()
+        if x[:2]!="IS" or len(x)<3 or x[2] not in (" ","\n","\t"): return right_data
+        tmp = right_data.split(";", 1)
+        q = tmp[0].strip()
+        if q!='':
+            if q[:20].lower() != "comment on function " or len(tmp) < 2: return right_data
+            q = q[20:].split("(",1)[0].strip()
+            if q != fname: return right_data
+        right_data = tmp[-1]
+        tmp, comment, q = comment[3:].strip() + " ", "", False
+        for n, x in enumerate(tmp):
+            if x=="'" and tmp[n+1]!="'":
+                q = not q
+                continue
+            elif x==";" and not q:
+                break
+            comment += x
+        right_data = f"comment on function {fname}({fdefs}) is '{comment[:-1]}';{right_data}"
+        return right_data
 
     @staticmethod
     def do_save_script(sql_b64=None, data=None, **kwargs):

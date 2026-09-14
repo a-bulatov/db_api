@@ -6,6 +6,7 @@ from starlette.routing import Route
 from sys import modules
 from json5 import loads
 from web import admin_routes
+from os import environ as ENV
 
 def api_help(method=None, **kwarggs):
     """
@@ -32,11 +33,12 @@ async def do_call(request):
     return JSONResponse(x)
 
 
-def init_app(cfg_file):
+def init_app():
     """
     Инициализация приложения
     настройка API. API может лежать в инклуде
     """
+    cfg_file = ENV.get("API_CONFIG", "config.yaml")
     cfg = Config(cfg_file, can_include=["API"])
     for x in cfg.API.keys():
         fnc = cfg.API[x]
@@ -53,7 +55,7 @@ def init_app(cfg_file):
     return Starlette(debug=True, routes=[Route("/api", endpoint=do_call, methods=['POST']),]+admin_routes())
 
 
-app = init_app("config.yaml")
+app = init_app()
 
 
 if __name__=="__main__":
