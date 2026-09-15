@@ -42,7 +42,7 @@ $$;
 comment on function meta.enum_keys_to_ids(varchar(250), varchar(250)[]) is 'Преобразует массив ключей enum к массиву id в meta.enum';
 
 
-create function meta.enmum_ids_to_keys(p_enum varchar(250), p_ids integer[])
+create function meta.enum_ids_to_keys(p_enum varchar(250), p_ids integer[])
 returns varchar(250)[]
 language sql
 stable
@@ -52,13 +52,13 @@ from meta.enum v
 inner join meta.enum t on v.parent_id=t.id and t.parent_id is null and t."key"=p_enum
  and v.id=any(p_ids);
 $$;
-comment on function meta.enmum_ids_to_keys(varchar(250), integer[]) is 'Преобразует массив id enum к массиву ключей';
+comment on function meta.enum_ids_to_keys(varchar(250), integer[]) is 'Преобразует массив id enum к массиву ключей';
 
 
-create function meta.enmum_ids_check(p_enum character varying, p_key character varying, p_ids integer[])
+create function meta.enum_ids_check(p_enum character varying, p_key character varying, p_ids integer[])
  RETURNS boolean
  LANGUAGE plpgsql
-AS $meta_enmum_ids_check__2026_07_07$
+AS $meta_enum_ids_check__2026_07_07$
 begin
 return exists(
      select 1
@@ -67,11 +67,11 @@ return exists(
      and v.key=p_key and v.id = any(p_ids)
 );
 end
-$meta_enmum_ids_check__2026_07_07$;
-comment on function meta.enmum_ids_check(varchar(250), varchar(250), integer[]) is 'Проверяет есть ли в списке идентификатор указанного ключа';
+$meta_enum_ids_check__2026_07_07$;
+comment on function meta.enum_ids_check(varchar(250), varchar(250), integer[]) is 'Проверяет есть ли в списке идентификатор указанного ключа';
 
 
-create function meta.enmum_ids_set(p_enum varchar(250), p_key varchar(250), p_state boolean default true, p_ids integer[] default null)
+create function meta.enum_ids_set(p_enum varchar(250), p_key varchar(250), p_state boolean default true, p_ids integer[] default null)
 returns integer[]
 language plpgsql
 as $$
@@ -95,7 +95,7 @@ begin
     return p_ids;
 end
 $$;
-comment on function meta.enmum_ids_set(varchar(250), varchar(250), boolean, integer[]) is 'Добавляет или удаляет из списка идентификатор указанного ключа';
+comment on function meta.enum_ids_set(varchar(250), varchar(250), boolean, integer[]) is 'Добавляет или удаляет из списка идентификатор указанного ключа';
 
 
 create function meta.enum_keys(p_enum varchar(250))
@@ -561,9 +561,9 @@ begin
              end if;
         end if;
 
-        v_column.flags = meta.enmum_ids_set('attr_flags','UQ', (v_column.defs->>'is_unique')::boolean,
-                         meta.enmum_ids_set('attr_flags','NN', not((v_column.defs->>'is_nullable')::boolean),
-                         meta.enmum_ids_set('attr_flags','RO', not((v_column.defs->>'is_editable')::boolean),
+        v_column.flags = meta.enum_ids_set('attr_flags','UQ', (v_column.defs->>'is_unique')::boolean,
+                         meta.enum_ids_set('attr_flags','NN', not((v_column.defs->>'is_nullable')::boolean),
+                         meta.enum_ids_set('attr_flags','RO', not((v_column.defs->>'is_editable')::boolean),
         v_column.flags)));
 
         if v_column.id is null then
@@ -2461,20 +2461,20 @@ begin
 
   	
 	v_flags = case when v_attr.is_not_null 
-		then meta.enmum_ids_set('attr_flags','NN')
+		then meta.enum_ids_set('attr_flags','NN')
 		else '{}'::integer[]
 	end;
 	
 	if v_attr.is_unique then
-		v_flags = meta.enmum_ids_set('attr_flags','UQ', true, v_flags);
+		v_flags = meta.enum_ids_set('attr_flags','UQ', true, v_flags);
 	end if;
 	if v_attr.is_primary_key and v_type in ('I','G') then
-		v_flags = meta.enmum_ids_set('attr_flags','PK', true, v_flags);
+		v_flags = meta.enum_ids_set('attr_flags','PK', true, v_flags);
 	elseif v_attr.is_int_key and v_type = 'I' then
-		v_flags = meta.enmum_ids_set('attr_flags','IPK', true, v_flags);
+		v_flags = meta.enum_ids_set('attr_flags','IPK', true, v_flags);
 	end if;
 	if v_sheet.key_field is null or (v_attr.typcategory='N' and v_attr."default" like 'nextval(%') then
-		v_flags = meta.enmum_ids_set('attr_flags','RO', true, v_flags);
+		v_flags = meta.enum_ids_set('attr_flags','RO', true, v_flags);
 	end if;
 
   	insert into meta.attribute(entity_id, npp, "name", title, flags, type_id)
@@ -2504,7 +2504,7 @@ begin
     
 	if v_attr.need_table = 'meta.class' then
 		update meta.attribute set
-			flags = meta.enmum_ids_set('attr_flags','CLS', true, flags)
+			flags = meta.enum_ids_set('attr_flags','CLS', true, flags)
 		where id = v_attr.from_col_id;
 		continue;
 	end if;
@@ -2577,11 +2577,11 @@ begin
 
 	if i_tmp is not null then
 		update meta.attribute set
-			flags = meta.enmum_ids_set('attr_flags','PK', true, flags)
+			flags = meta.enum_ids_set('attr_flags','PK', true, flags)
 		where id = i_tmp;
 	else
 		update meta.attribute set
-			flags = meta.enmum_ids_set('attr_flags','RO', true, flags)
+			flags = meta.enum_ids_set('attr_flags','RO', true, flags)
 		where entity_id = v_sheet.id;
 	end if;
   end if;
@@ -2907,7 +2907,7 @@ create function meta.class_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS 
-$meta_class_set__2026_09_14$
+$meta_class_set__2026_09_15$
 declare
     v_class record;
     v_attr record;
@@ -2976,7 +2976,7 @@ begin
         left join meta.attribute a on a.entity_id = v_class.entity_id and a.name = (ja.value->>'name')
         left join meta.class_attr ca on ca.attribute_id = a.id and ca.class_id = v_class.id
     loop
-        if v_attr.to_delete and v_attr.id is null then
+        if v_attr.to_delete and (v_attr.id is null or not v_attr.in_def) then
             continue;
         elseif v_attr.id is null then
             v_json = jsonb_build_object(
@@ -2990,6 +2990,29 @@ begin
             into v_attr.id
             from meta.attribute a
             where a.entity_id = v_class.entity_id and a.name = v_attr.name;
+        elseif v_attr.to_delete and not exists (
+          with recursive cla as (
+            select c.id, c.parent_id from meta.class c where c.id = v_class.id
+            union all
+            select c.id, c.parent_id from meta.class c
+            inner join cls on cls.parent_id = c.id
+            )
+          select 1 from meta.class_attr a
+          inner join cla on cla.id = a.class_id and a.id = v_attr.id and a.visible
+          limit 1
+        ) then
+            /* если никто не использует - удалить у всех и продолжить */
+            delete from meta.class_attr ca
+            where ca.attribute_id = v_attr.id and ca.class_id in (
+              with recursive cla as (
+                select c.id, c.parent_id from meta.class c where c.id = v_class.id
+                union all
+                select c.id, c.parent_id from meta.class c
+                inner join cls on cls.parent_id = c.id
+                )
+              select cla.id from cla
+            );
+            continue;
         end if;    
         
         insert into meta.class_attr(class_id, attribute_id, visible, title)
@@ -3008,13 +3031,13 @@ begin
     left join meta.entity e on e.id = c.entity_id
     where c.id = v_class.id);
 end;
-$meta_class_set__2026_09_14$;
+$meta_class_set__2026_09_15$;
 
 create function meta.class_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS 
-$meta_class_get__2026_09_14$
+$meta_class_get__2026_09_15$
 declare
   v_class record;
   v_attrs jsonb;
@@ -3054,7 +3077,7 @@ begin
           inner join meta.class_attr ca on ca.class_id = cla.id
         )
 
-        select ma.id, ma.name, jsonb_strip_nulls(jsonb_build_object(
+        select ma.id, ma.name, a.visible, jsonb_strip_nulls(jsonb_build_object(
             'delete', case when a.visible then null::boolean else true end, 
             'title', a.title
           )) defs
@@ -3073,9 +3096,10 @@ begin
       select e.guid 
       from meta.attribute a
       inner join meta.entity e on a.entity_id = e.id
-      where a.id = (select id from attr limit 1)
+      where a.id = (select id from attr limit 1)      
     )))->'columns') el
-    inner join attr on attr.name = el.value->>'name';
+    inner join attr on attr.name = el.value->>'name'
+    where attr.visible or coalesce((f_params->>'show_deleted')::boolean, false);
                                   
     return (
         select jsonb_build_object(
@@ -3092,4 +3116,4 @@ begin
           where c.id = v_class.id
     );
 end
-$meta_class_get__2026_09_14$;
+$meta_class_get__2026_09_15$;
