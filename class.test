@@ -1,0 +1,95 @@
+drop table if exists demo.class;
+
+create table demo.class(
+	id bigserial primary key,
+    class_id bigint references meta.class(id),
+    f1 varchar,
+    f2 varchar,
+    f3 varchar
+)
+
+class_set
+{
+    "guid": "da7584c3-0935-422c-a6bf-8141b204a7d2",
+    "title": "Класс в физической таблице",
+    "table_guid": "0000a1d1-6442-4321-abe7-247fb6000000",
+    "attributes":[
+        {
+          "name": "f1"
+        }
+    ]
+}
+
+sheet_set
+{
+    "guid": "0000a1d1-6442-4321-abe7-247fb6000000",
+    "rows": [
+        {
+            "class_guid": "da7584c3-0935-422c-a6bf-8141b204a7d2",
+            "data": {
+                "f1": "aaaa",
+                "f2": "bbb",
+                "class_id": 5
+            }
+        }
+    ]
+}
+
+
+class_set
+{
+    "guid": "43022ca7-377a-4e98-a2c9-826f4d90b2d3",
+    "parent_guid": "da7584c3-0935-422c-a6bf-8141b204a7d2",
+    "title": "Наследник 1 (физич тбл)",
+    "attributes":[
+        {
+          "name": "f2",
+          "title": "доп. поле"
+        }
+    ]
+}
+
+sheet_set
+{
+    "guid": "0000a1d1-6442-4321-abe7-247fb6000000",
+    "rows": [
+        {
+            "class_guid": "43022ca7-377a-4e98-a2c9-826f4d90b2d3",
+            "data": {
+                "f1": "bbb",
+                "f2": "ccccc",
+                "class_id": 537
+            }
+        }
+    ]
+}
+
+
+class_set
+{
+    "guid": "13c0b13c-e650-48a9-ab94-e9b3b93e312b",
+    "table_guid": "694aba28-9796-4ea0-8a81-07966f53de81",
+    "title": "Классы на json",
+    "entity_type": "RVT",
+    "attributes":[
+        {
+          "name": "f1",
+          "type": "S"
+        }
+    ]
+}
+
+sheet_set
+{
+    "guid": "694aba28-9796-4ea0-8a81-07966f53de81",
+    "rows": [
+        {
+            "class_guid": "13c0b13c-e650-48a9-ab94-e9b3b93e312b",
+            "data": {
+                "f1": "aaaa",
+                "f2": "bbb",
+                "class_id": 5
+            }
+        }
+    ]
+}

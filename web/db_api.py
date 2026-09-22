@@ -242,6 +242,17 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         ret = x.defs.strip().replace("\t","    ")
         if x.description:
             h = x.defs.split("\n", 1)[0].split("FUNCTION")[1].strip()
+            if "DEFAULT" in h.upper():
+                h = h.strip()[:-1]
+                h, args = h.split("(",1)
+                h += "("
+                for n, d in enumerate(args.split(",")):
+                    t = d.upper().split("DEFAULT", 1)[0]
+                    d = d[:len(t)]
+                    if n > 0: h+=", "
+                    h += d
+                h = h.strip()
+                h += ")"
             ret = f"""{ret};\n\ncomment on function {h}\n is '{x.description.replace("'","''")}';"""
         return ret
 

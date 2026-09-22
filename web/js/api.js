@@ -27,8 +27,7 @@ window.onload = function () {
         .catch((error) => console.error("Error:", error));
 };
 
-function getParams() {
-    let params = editor.getValue().trim();
+function parseParams(params) {
     try {
         if (params.length == 0) params = "{}";
         return JSON.parse(params);
@@ -58,7 +57,8 @@ function getParams() {
 function run() {
     let sel = document.getElementById("method");
     let method = sel.value;
-    let params = getParams();
+    let params = editor.getValue().trim();
+    params = parseParams(params);
     const time = performance.now();
     fetch("/api", {
         method: "POST",
@@ -98,6 +98,7 @@ function help() {
 }
 
 function format() {
-    let params = getParams();
+    let params = editor.getValue().trim();
+    params = parseParams(params);
     editor.setValue(JSON.stringify(params, null, 4));
 }
