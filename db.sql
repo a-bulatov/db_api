@@ -2357,7 +2357,8 @@ $data_filter_part_get__2026_08_04$;
 create function meta.sheet_set_pg(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set_pg__2026_09_08$
+AS 
+$meta_sheet_set_pg__2026_09_24$
 declare
   v_sheet record;
   v_attr record;
@@ -2365,237 +2366,248 @@ declare
   v_type char(1);
   i_tmp bigint;
   j_tmp jsonb;
+  s_tmp varchar;
 begin
-  
+
   select pt.guid, pt.oid, pt.name, pt.id, null::bigint version_id,
-  	a.attname as key_field,	a."key_type", a.int_key
+      a.attname as key_field,    a."key_type", a.int_key
   into v_sheet 
   from meta.pg_table pt
   inner join (
-	with pt0 as (
-	  select oid
-	  from meta.pg_table t
-	  where t.guid = (f_params->>'guid')::uuid or ((f_params->>'guid') is null and t.name = (f_params->>'table'))
-	),
-	kf as (
-	  select case when t.typcategory='N' then 'N' else 'G' end "key_type",
-		c.oid, a.attname, cn.contype,
-		pg_get_expr(d.adbin, d.adrelid) is not null key_gen
-	  from pg_catalog.pg_class c 
-	  join pt0 on pt0.oid = c.oid
-	  join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum>0
-	  join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
-	  join pg_catalog.pg_type t on t.oid = a.atttypid and (t.typcategory = 'N' or t.typname='uuid') and a.attnotnull
-	  join pg_catalog.pg_namespace n on c.relnamespace = n.oid
-	  join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
-	  and cn.contype in ('u','p')
-	)
-	
-	  select pt0.oid, kf.key_type, kf.attname, kf.contype, kf.key_gen, kti.attname int_key
-	  from pt0
-	  left join (select * from kf order by kf.key_type limit 1) kf on true
-	  left join kf kti on kti.key_type='N'
+    with pt0 as (
+      select oid
+      from meta.pg_table t
+      where t.guid = (f_params->>'guid')::uuid or ((f_params->>'guid') is null and t.name = (f_params->>'table'))
+    ),
+    kf as (
+      select case when t.typcategory='N' then 'N' else 'G' end "key_type",
+        c.oid, a.attname, cn.contype,
+        pg_get_expr(d.adbin, d.adrelid) is not null key_gen
+      from pg_catalog.pg_class c 
+      join pt0 on pt0.oid = c.oid
+      join pg_catalog.pg_attribute a on a.attrelid = c.oid and a.attnum>0
+      join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
+      join pg_catalog.pg_type t on t.oid = a.atttypid and (t.typcategory = 'N' or t.typname='uuid') and a.attnotnull
+      join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+      join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
+      and cn.contype in ('u','p')
+    )
+    
+      select pt0.oid, kf.key_type, kf.attname, kf.contype, kf.key_gen, kti.attname int_key
+      from pt0
+      left join (select * from kf order by kf.key_type limit 1) kf on true
+      left join kf kti on kti.key_type='N'
   ) a on a.oid = pt.oid limit 1;
 
   if v_sheet.oid is null then
-  	return jsonb_build_object('error', format('Таблица %s %s не существует', (f_params->>'guid'), (f_params->>'table')));
+      return jsonb_build_object('error', format('Таблица %s %s не существует', (f_params->>'guid'), (f_params->>'table')));
   end if;
 
   if coalesce((f_params->>'delete')::boolean, false) then
-  	delete from meta.entity where id = v_sheet.id;
-	delete from data.row where id = v_sheet.id;
+      delete from meta.entity where id = v_sheet.id;
+    delete from data.row where id = v_sheet.id;
   end if;
 
   /* регистрация таблицы, если она еще не зарегистрированиа */
   if v_sheet.id is null then
-  	insert into data.row(entity_id, guid, version_id)
-	select t.id, v_sheet.guid, t.version_id
-	from  meta.entity t
-	where t.guid = uuid_nil()
-	returning id into v_sheet.id;
+      insert into data.row(entity_id, guid, version_id)
+    select t.id, v_sheet.guid, t.version_id
+    from  meta.entity t
+    where t.guid = uuid_nil()
+    returning id into v_sheet.id;
 
-	insert into meta.version(entity_id) values (v_sheet.id)
-	returning id into v_sheet.version_id;
+    insert into meta.version(entity_id) values (v_sheet.id)
+    returning id into v_sheet.version_id;
 
-	update data.row set
-		version_id = v_sheet.version_id
-	where id = v_sheet.id;
+    update data.row set
+        version_id = v_sheet.version_id
+    where id = v_sheet.id;
 
-	insert into meta.entity(id, guid, version_id, entity_type, title)
-	select r.id, r.guid, r.version_id, 'PHYS', coalesce(f_params->>'title', v_sheet.name)
-	from data.row r
-	where r.id = v_sheet.id;
+    insert into meta.entity(id, guid, version_id, entity_type, title)
+    select r.id, r.guid, r.version_id, 'PHYS', coalesce(f_params->>'title', v_sheet.name)
+    from data.row r
+    where r.id = v_sheet.id;
+  end if;
+  
+  select x.value->>'name'
+  from jsonb_array_elements(f_params->'columns') x
+  except
+  select a.attname
+  from pg_catalog.pg_attribute a where a.attrelid = v_sheet.oid
+  limit 1 into s_tmp;
+  
+  if s_tmp is not null then
+      return json_build_object('error', format('Поле %s не может быть добавлено в таблицу %s', s_tmp, v_sheet.name));
   end if;
 
   /* регистрация атрибутов */
   for v_attr in
-  	select
-		a.attnum as position,
-		quote_ident(a.attname) as attribute_name,
-		coalesce(js.title, ma.title, col_description(c.oid, a.attnum), a.attname) as title,
-		format_type(a.atttypid, a.atttypmod) as data_type,
-		t.typname,
-		t.typcategory,
-		a.attlen as type_length,
-		a.attnotnull as is_not_null,
-		(cn.contype = 'u') is_unique,
-		a.attname = v_sheet.key_field is_primary_key,
-		a.attname = v_sheet.int_key is_int_key,
-		pg_get_expr(d.adbin, d.adrelid) as "default"
-	from pg_catalog.pg_attribute a
-	inner join pg_catalog.pg_type t on t.oid = a.atttypid
-	join pg_catalog.pg_class c on a.attrelid = c.oid
-	join pg_catalog.pg_namespace n on c.relnamespace = n.oid
-	left join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
-	left join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
-	left join (
-	 	select (x.value->>'name') "name", (x.value->>'title') "title"
-	    from jsonb_array_elements(f_params->'columns') x
-	) js on js.name = a.attname
-	left join meta.attribute ma on ma.entity_id = v_sheet.id and ma.name = a.attname
-	where a.attstattarget!=0 and c.oid = v_sheet.oid
-	order by a.attnum
+      select
+        a.attnum as position,
+        quote_ident(a.attname) as attribute_name,
+        coalesce(js.title, ma.title, col_description(c.oid, a.attnum), a.attname) as title,
+        format_type(a.atttypid, a.atttypmod) as data_type,
+        t.typname,
+        t.typcategory,
+        a.attlen as type_length,
+        a.attnotnull as is_not_null,
+        (cn.contype = 'u') is_unique,
+        a.attname = v_sheet.key_field is_primary_key,
+        a.attname = v_sheet.int_key is_int_key,
+        pg_get_expr(d.adbin, d.adrelid) as "default"
+    from pg_catalog.pg_attribute a
+    inner join pg_catalog.pg_type t on t.oid = a.atttypid
+    join pg_catalog.pg_class c on a.attrelid = c.oid
+    join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+    left join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
+    left join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
+    left join (
+         select (x.value->>'name') "name", (x.value->>'title') "title"
+        from jsonb_array_elements(f_params->'columns') x
+    ) js on js.name = a.attname
+    left join meta.attribute ma on ma.entity_id = v_sheet.id and ma.name = a.attname
+    where a.attstattarget!=0 and c.oid = v_sheet.oid
+    order by a.attnum
   loop
-  	v_type = case
-		when v_attr.typcategory = 'N' and v_attr.typname ~ '^[a-z]*[0-9]$' then 'I'
-		when v_attr.typcategory = 'N' then 'F'
-		when v_attr.typcategory = 'U' and v_attr.typname='uuid' then 'G'
-		when v_attr.typcategory = 'D' then 'T'
-		when v_attr.typcategory = 'B' then 'B'
-		else 'S'
-	end;
+      v_type = case
+        when v_attr.typcategory = 'N' and v_attr.typname ~ '^[a-z]*[0-9]$' then 'I'
+        when v_attr.typcategory = 'N' then 'F'
+        when v_attr.typcategory = 'U' and v_attr.typname='uuid' then 'G'
+        when v_attr.typcategory = 'D' then 'T'
+        when v_attr.typcategory = 'B' then 'B'
+        else 'S'
+    end;
 
-  	
-	v_flags = case when v_attr.is_not_null 
-		then meta.enum_ids_set('attr_flags','NN')
-		else '{}'::integer[]
-	end;
-	
-	if v_attr.is_unique then
-		v_flags = meta.enum_ids_set('attr_flags','UQ', true, v_flags);
-	end if;
-	if v_attr.is_primary_key and v_type in ('I','G') then
-		v_flags = meta.enum_ids_set('attr_flags','PK', true, v_flags);
-	elseif v_attr.is_int_key and v_type = 'I' then
-		v_flags = meta.enum_ids_set('attr_flags','IPK', true, v_flags);
-	end if;
-	if v_sheet.key_field is null or (v_attr.typcategory='N' and v_attr."default" like 'nextval(%') then
-		v_flags = meta.enum_ids_set('attr_flags','RO', true, v_flags);
-	end if;
+      
+    v_flags = case when v_attr.is_not_null 
+        then meta.enum_ids_set('attr_flags','NN')
+        else '{}'::integer[]
+    end;
+    
+    if v_attr.is_unique then
+        v_flags = meta.enum_ids_set('attr_flags','UQ', true, v_flags);
+    end if;
+    if v_attr.is_primary_key and v_type in ('I','G') then
+        v_flags = meta.enum_ids_set('attr_flags','PK', true, v_flags);
+    elseif v_attr.is_int_key and v_type = 'I' then
+        v_flags = meta.enum_ids_set('attr_flags','IPK', true, v_flags);
+    end if;
+    if v_sheet.key_field is null or (v_attr.typcategory='N' and v_attr."default" like 'nextval(%') then
+        v_flags = meta.enum_ids_set('attr_flags','RO', true, v_flags);
+    end if;
 
-  	insert into meta.attribute(entity_id, npp, "name", title, flags, type_id)
-	select v_sheet.id, v_attr.position, v_attr.attribute_name, v_attr.title, v_flags, t.id
-	from meta.data_type t where t.key = v_type
-	on conflict (entity_id, "name") do update set
-	 title = excluded.title
-	;
+      insert into meta.attribute(entity_id, npp, "name", title, flags, type_id)
+    select v_sheet.id, v_attr.position, v_attr.attribute_name, v_attr.title, v_flags, t.id
+    from meta.data_type t where t.key = v_type
+    on conflict (entity_id, "name") do update set
+     title = excluded.title
+    ;
   end loop;
   
   
   /* добавляем таблицы, которых не хватает для внешних ссылок и строим ссылки */  
   for v_attr in
-  	select pgt2.name need_table, null::bigint to_table_id,
-		a.name from_col, a.id from_col_id, null::bigint to_col_id, ref_t.id ref_t_id,
-		(pgt2.id is null) is_new, pgt2.guid ref_guid
-	from meta.pg_table pgt
-	inner join meta.attribute a on a.entity_id = pgt.id 
-	inner join meta.data_type t on t.id = a.type_id and t.key='I'
-	inner join pg_catalog.pg_attribute pa on pa.attname = a.name and pa.attrelid = pgt.oid
-	inner join pg_catalog.pg_constraint cn on cn.contype = 'f'  and cn.conrelid = pgt.oid and pa.attnum  = any(cn.conkey) and array_length(cn.conkey,1)=1
-	inner join pg_catalog.pg_attribute rat on rat.attrelid =  cn.confrelid and rat.attnum = any(cn.confkey)
-	inner join meta.data_type ref_t on ref_t.key = 'R'
-	left join meta.pg_table pgt2 on pgt2.oid = cn.confrelid
-	where pgt.id = v_sheet.id
+      select pgt2.name need_table, null::bigint to_table_id,
+        a.name from_col, a.id from_col_id, null::bigint to_col_id, ref_t.id ref_t_id,
+        (pgt2.id is null) is_new, pgt2.guid ref_guid
+    from meta.pg_table pgt
+    inner join meta.attribute a on a.entity_id = pgt.id 
+    inner join meta.data_type t on t.id = a.type_id and t.key='I'
+    inner join pg_catalog.pg_attribute pa on pa.attname = a.name and pa.attrelid = pgt.oid
+    inner join pg_catalog.pg_constraint cn on cn.contype = 'f'  and cn.conrelid = pgt.oid and pa.attnum  = any(cn.conkey) and array_length(cn.conkey,1)=1
+    inner join pg_catalog.pg_attribute rat on rat.attrelid =  cn.confrelid and rat.attnum = any(cn.confkey)
+    inner join meta.data_type ref_t on ref_t.key = 'R'
+    left join meta.pg_table pgt2 on pgt2.oid = cn.confrelid
+    where pgt.id = v_sheet.id
   loop
     
-	if v_attr.need_table = 'meta.class' then
-		update meta.attribute set
-			flags = meta.enum_ids_set('attr_flags','CLS', true, flags)
-		where id = v_attr.from_col_id;
-		continue;
-	end if;
-	
-	if v_attr.is_new then
-	  j_tmp = meta.sheet_set(jsonb_build_object('table_name', v_attr.need_table));
-	  if j_tmp ? 'error' then
-		  return j_tmp;
-	  end if;
-	end if;
-	
-	select e.id into v_attr.to_table_id
-	from meta.entity e where e.guid = v_attr.ref_guid;
-	
-	/* Поиск  именующего атрибута */
-	select x.id into v_attr.to_col_id from (	  
-	  select x.n, a.id
-	  from meta.attribute a
-	  inner join (
-		select 'title' nm, 1 n
-		union all select * from (values
-		  ('name', 2),
-		  ('key', 3),
-		  ('%name', 4)
-		) v
-	  ) x on a.name ilike x.nm
-	  where a.entity_id = v_attr.to_table_id
-	  union all
-	  select (row_number() over(order by a.id))+100, a.id
-	  from meta.attribute a
-	  inner join meta.data_type t on a.type_id = t.id and t.key = 'S'
-	  where a.entity_id = v_attr.to_table_id
-	  union all
-	  select (row_number() over(order by a.id))+200, a.id
-	  from meta.attribute a
-	  inner join meta.data_type t on a.type_id = t.id
-	  where a.entity_id = v_attr.to_table_id
-	  order by 1 limit 1
-	) x;
-	
-	raise notice '%', row_to_json(v_attr);
-	
-	if v_attr.to_col_id is null then
-	  return jsonb_build_object('error', format('Для атрибута-ссылки %s не найдено какое значение вывести', v_attr.from_col));
-	end if;
-	
-	update meta.attribute set
-	 	type_id = v_attr.ref_t_id,
-		ref_attribute_id = v_attr.to_col_id
-	where id = v_attr.from_col_id;
-	
+    if v_attr.need_table = 'meta.class' then
+        update meta.attribute set
+            flags = meta.enum_ids_set('attr_flags','CLS', true, flags)
+        where id = v_attr.from_col_id;
+        continue;
+    end if;
+    
+    if v_attr.is_new then
+      j_tmp = meta.sheet_set(jsonb_build_object('table_name', v_attr.need_table));
+      if j_tmp ? 'error' then
+          return j_tmp;
+      end if;
+    end if;
+    
+    select e.id into v_attr.to_table_id
+    from meta.entity e where e.guid = v_attr.ref_guid;
+    
+    /* Поиск  именующего атрибута */
+    select x.id into v_attr.to_col_id from (      
+      select x.n, a.id
+      from meta.attribute a
+      inner join (
+        select 'title' nm, 1 n
+        union all select * from (values
+          ('name', 2),
+          ('key', 3),
+          ('%name', 4)
+        ) v
+      ) x on a.name ilike x.nm
+      where a.entity_id = v_attr.to_table_id
+      union all
+      select (row_number() over(order by a.id))+100, a.id
+      from meta.attribute a
+      inner join meta.data_type t on a.type_id = t.id and t.key = 'S'
+      where a.entity_id = v_attr.to_table_id
+      union all
+      select (row_number() over(order by a.id))+200, a.id
+      from meta.attribute a
+      inner join meta.data_type t on a.type_id = t.id
+      where a.entity_id = v_attr.to_table_id
+      order by 1 limit 1
+    ) x;
+    
+    raise notice '%', row_to_json(v_attr);
+    
+    if v_attr.to_col_id is null then
+      return jsonb_build_object('error', format('Для атрибута-ссылки %s не найдено какое значение вывести', v_attr.from_col));
+    end if;
+    
+    update meta.attribute set
+         type_id = v_attr.ref_t_id,
+        ref_attribute_id = v_attr.to_col_id
+    where id = v_attr.from_col_id;
+    
   end loop;
   
-						   
+                           
   if not exists(select 1
-	from meta.attribute a
-	inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
-	inner join meta.enum pk on pk.parent_id = flg.id and pk.id = any(a.flags) and pk.key = 'PK'
-	where a.entity_id = v_sheet.id)
+    from meta.attribute a
+    inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
+    inner join meta.enum pk on pk.parent_id = flg.id and pk.id = any(a.flags) and pk.key = 'PK'
+    where a.entity_id = v_sheet.id)
   then
     /* если первичного ключа нет - ищем подходящий guid*/
-  	select a.id
-	into i_tmp
-	from meta.attribute a
-	inner join meta.data_type t on a.type_id = t.id and t.key='G'
-	inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
-	inner join meta.enum nn on nn.parent_id = flg.id and nn.id = any(a.flags) and nn.key = 'NN'
-	inner join meta.enum uk on uk.parent_id = flg.id and uk.id = any(a.flags) and uk.key = 'UQ'
-	where a.entity_id = v_sheet.id order by a.id limit 1;
+      select a.id
+    into i_tmp
+    from meta.attribute a
+    inner join meta.data_type t on a.type_id = t.id and t.key='G'
+    inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
+    inner join meta.enum nn on nn.parent_id = flg.id and nn.id = any(a.flags) and nn.key = 'NN'
+    inner join meta.enum uk on uk.parent_id = flg.id and uk.id = any(a.flags) and uk.key = 'UQ'
+    where a.entity_id = v_sheet.id order by a.id limit 1;
 
-	if i_tmp is not null then
-		update meta.attribute set
-			flags = meta.enum_ids_set('attr_flags','PK', true, flags)
-		where id = i_tmp;
-	else
-		update meta.attribute set
-			flags = meta.enum_ids_set('attr_flags','RO', true, flags)
-		where entity_id = v_sheet.id;
-	end if;
+    if i_tmp is not null then
+        update meta.attribute set
+            flags = meta.enum_ids_set('attr_flags','PK', true, flags)
+        where id = i_tmp;
+    else
+        update meta.attribute set
+            flags = meta.enum_ids_set('attr_flags','RO', true, flags)
+        where entity_id = v_sheet.id;
+    end if;
   end if;
 
   return jsonb_build_object('guid', v_sheet.guid, 'table_name', v_sheet.name);
 end
-$meta_sheet_set_pg__2026_09_08$;
-
+$meta_sheet_set_pg__2026_09_24$;
 
 create function meta.int2guid(x bigint)
  RETURNS uuid
@@ -3176,7 +3188,7 @@ create function meta.table_class_attrs(table_id bigint DEFAULT NULL::bigint)
 AS 
 $meta_table_class_attrs__2026_09_17$
 with recursive cls as (
-  select c.id, ARRAY[c.id] chain
+  select c.id, ARRAY[c.id] as "chain"
   from meta.class c
   where c.parent_id is null and (c.entity_id = table_id or table_id is null)
   union all
