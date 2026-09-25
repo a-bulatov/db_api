@@ -93,3 +93,45 @@ sheet_set
         }
     ]
 }
+
+class_set
+{
+  	"guid": "d494fbab-713f-49ff-831e-10e380a4730e",
+    "parent_guid": "13c0b13c-e650-48a9-ab94-e9b3b93e312b",
+    "title": "json 2",
+    "attributes":[
+        {
+          "name": "f2",
+          "type": "S"
+        }
+    ]
+}
+
+
+class_set
+{
+  	"guid": "35420f2f-c1f9-4275-ac5d-fc52e5ddb64c",
+  	"table_guid": "6ebd97a6-64af-4c74-89d7-c101b61e653c",
+    "title": "EAV таблица",
+    "attributes":[
+        {
+          "name": "x1",
+          "type": "S"
+        }
+    ]
+}
+
+sheet_set
+{
+    "guid": "6ebd97a6-64af-4c74-89d7-c101b61e653c",
+    "rows": [
+        {
+            "class_guid": "35420f2f-c1f9-4275-ac5d-fc52e5ddb64c",
+            "data": {
+                "x1": "aaaa",
+                "f2": "bbb",
+                "class_id": 5
+            }
+        }
+    ]
+}

@@ -1207,7 +1207,7 @@ create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS 
-$data_sheet_set__2026_09_21$
+$data_sheet_set__2026_09_24$
 declare
    v_sheet record;
    v_counters record;
@@ -1218,6 +1218,7 @@ declare
    tmp_rec record;
    tmp_ret jsonb;
 begin
+
    select
        0::bigint "input",
        0::bigint "deleted",
@@ -1321,7 +1322,7 @@ begin
         if v_row.attribute_id is null then
             return jsonb_build_object('error', format('Атрибут %s не найден или ошибка в структуре входного сообщения',v_row.name));
         end if;
-        
+
         if v_row.guid != tmp_row_guid then
             tmp_row_guid = v_row.guid;
             v_counters.input=v_counters.input + 1;
@@ -1461,12 +1462,13 @@ begin
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end;
-$data_sheet_set__2026_09_21$;
+$data_sheet_set__2026_09_24$;
 
 create function data.sheet_set_rvt(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_sheet_set_rvt__2026_09_07$
+AS 
+$data_sheet_set_rvt__2026_09_24$
 declare
    v_row record;
    v_sheet record;
@@ -1489,167 +1491,167 @@ begin
          (f_params->'_SYS_INFO_'->>'entity_type') entity_type
     into v_sheet;
 
-	select
+    select
        0::bigint "input",
        0::bigint "deleted",
        0::bigint "updated",
        0::bigint "inserted"
     into v_counters;
 
-	v_cols = meta.field_list(jsonb_build_object('guid', v_sheet.guid));
+    v_cols = meta.field_list(jsonb_build_object('guid', v_sheet.guid));
 
-	for v_row in
-		select
-			coalesce(j.guid, uuid_generate_v4()) guid,
-			r.id,
-			rv.guid version_guid,
-			rv.id version_id,
-			coalesce(rv.status,'--') status,
-			coalesce(
-			  (v.id = r.version_id),
-			  (v.entity_id = r.entity_id and v.entity_id = v_sheet.id), (v.entity_id = v_sheet.id), true
-			) ver_is_correct,
-			j.to_delete,
-			cl.guid class_guid,
-			cl.id class_id,
-			(lv.id is not NULL) is_locked,
-			coalesce(rvt.row_data, jsonb_build_object()) row_data,
-			coalesce(rvt.refs, jsonb_build_object()) refs,
-			j."data" new_data
-		from (
-		  select
-		     (x.value->>'guid')::uuid guid,
-		     (x.value->>'class_guid')::uuid class_guid,
-			 (x.value->>'version_guid')::uuid version_guid,
-			 (x.value->'data') "data",
-			 coalesce((x.value->>'delete')::boolean, false) to_delete,
-		  	 row_number() over() npp
-		  from jsonb_array_elements(f_params->'rows') x
-		) j
-		left join meta.version v on v.guid = j.version_guid
-		left join data.row r on r.entity_id = v_sheet.id and (r.version_id=v.id or (v.id is null and r.guid = j.guid))
-		left join meta.class cl on cl.id = r.class_id or (r.id is null and cl.guid = j.class_guid)
-		left join meta.version rv on rv.id = coalesce(v.id, r.version_id)
-		left join meta.version lv on lv.id = r.id and lv.status in ('L','C')
-		left join data.rvt rvt on rvt.id = r.id and rvt.entity_id = v_sheet.id and rvt.version_id = rv.id
-		order by j.npp
+    for v_row in
+        select
+            coalesce(j.guid, uuid_generate_v4()) guid,
+            r.id,
+            rv.guid version_guid,
+            rv.id version_id,
+            coalesce(rv.status,'--') status,
+            coalesce(
+              (v.id = r.version_id),
+              (v.entity_id = r.entity_id and v.entity_id = v_sheet.id), (v.entity_id = v_sheet.id), true
+            ) ver_is_correct,
+            j.to_delete,
+            cl.guid class_guid,
+            cl.id class_id,
+            (lv.id is not NULL) is_locked,
+            coalesce(rvt.row_data, jsonb_build_object()) row_data,
+            coalesce(rvt.refs, jsonb_build_object()) refs,
+            j."data" new_data
+        from (
+          select
+             (x.value->>'guid')::uuid guid,
+             (x.value->>'class_guid')::uuid class_guid,
+             (x.value->>'version_guid')::uuid version_guid,
+             (x.value->'data') "data",
+             coalesce((x.value->>'delete')::boolean, false) to_delete,
+               row_number() over() npp
+          from jsonb_array_elements(f_params->'rows') x
+        ) j
+        left join meta.version v on v.guid = j.version_guid
+        left join data.row r on r.entity_id = v_sheet.id and (r.version_id=v.id or (v.id is null and r.guid = j.guid))
+        left join meta.class cl on cl.id = r.class_id or (r.id is null and cl.guid = j.class_guid)
+        left join meta.version rv on rv.id = coalesce(v.id, r.version_id)
+        left join meta.version lv on lv.id = r.id and lv.status in ('L','C')
+        left join data.rvt rvt on rvt.id = r.id and rvt.entity_id = v_sheet.id and rvt.version_id = rv.id
+        order by j.npp
     loop
         v_counters.input = v_counters.input + 1;
-		if not v_row.ver_is_correct then
-			return jsonb_build_object('error', format('Версия %s не соответствует строке %s', v_row.version_guid, v_row.guid));
-		end if;
-		if v_row.is_locked then
-			return jsonb_build_object('error', format('Строка %s заблокирована на запись', v_row.guid));
-		end if;
-		if v_row.class_guid is not null then
-			v_cols = meta.field_list(jsonb_build_object('class_guid', v_row.class_guid));
-		end if;
+        if not v_row.ver_is_correct then
+            return jsonb_build_object('error', format('Версия %s не соответствует строке %s', v_row.version_guid, v_row.guid));
+        end if;
+        if v_row.is_locked then
+            return jsonb_build_object('error', format('Строка %s заблокирована на запись', v_row.guid));
+        end if;
+        if v_row.class_guid is not null then
+            v_cols = meta.field_list(jsonb_build_object('class_guid', v_row.class_guid));
+        end if;
 
-		if v_row.id is null then
-			v_counters.inserted = v_counters.inserted+1;
-			insert into meta.version(entity_id, parent_id)
-			values(v_sheet.id, v_sheet.version_id)
-			returning id, guid into v_row.version_id, v_sheet.version_guid;
+        if v_row.id is null then
+            v_counters.inserted = v_counters.inserted+1;
+            insert into meta.version(entity_id, parent_id)
+            values(v_sheet.id, v_sheet.version_id)
+            returning id, guid into v_row.version_id, v_sheet.version_guid;
 
-			insert into data.row(class_id, entity_id, guid, version_id)
-			select v_row.class_id, v_sheet.id, v_row.guid, v_row.version_id
-			returning id into v_row.id;
+            insert into data.row(class_id, entity_id, guid, version_id)
+            select v_row.class_id, v_sheet.id, v_row.guid, v_row.version_id
+            returning id into v_row.id;
 
-			update meta.entity set version_id = v_row.version_id where id = v_sheet.id;
+            update meta.entity set version_id = v_row.version_id where id = v_sheet.id;
 
-			insert into data.rvt(id, entity_id, version_id)
-			values(v_row.id, v_sheet.id, v_row.version_id);
+            insert into data.rvt(id, entity_id, version_id)
+            values(v_row.id, v_sheet.id, v_row.version_id);
 
-			v_row.status = 'D';
-			v_counters.updated = v_counters.updated - 1;
-		end if;
+            v_row.status = 'D';
+            v_counters.updated = v_counters.updated - 1;
+        end if;
 
-		for v_def in
-			select v.value->>'name' fld_name, 
-			  t.key type_key,
-			  v_row.new_data->>(v.value->>'name') "value",
-			  case when t.key = 'E'
-			  	then a.ref_enum_key
-				else re.guid::varchar
-			  end ref_enum_key,
-			  re.entity_type,
-			  pg.key_type,
-			  pg.key_name,
-			  pg.int_key,
-			  pg.schema_name||'.'||pg.table_name ref_table,
-			  a.id, 
-			  a.name col_name,
-			  ra.name ref_attribute,
-			  nn.id is null as is_nullable,
-			  uk.id is not null as is_unique
+        for v_def in
+            select v.value->>'name' fld_name, 
+              t.key type_key,
+              v_row.new_data->>(v.value->>'name') "value",
+              case when t.key = 'E'
+                  then a.ref_enum_key
+                else re.guid::varchar
+              end ref_enum_key,
+              re.entity_type,
+              pg.key_type,
+              pg.key_name,
+              pg.int_key,
+              pg.schema_name||'.'||pg.table_name ref_table,
+              a.id, 
+              a.name col_name,
+              ra.name ref_attribute,
+              nn.id is null as is_nullable,
+              uk.id is not null as is_unique
             from jsonb_array_elements(v_cols->'columns') v
-			inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
-			inner join meta.attribute a on a.entity_id = v_sheet.id and a."name"=(v.value->>'name')
-			inner join meta.data_type t on t.id = a.type_id
-			left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(a.flags) and nn.key = 'NN'
-			left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(a.flags) and uk.key = 'UQ'
-			left join meta.attribute ra on ra.id = a.ref_attribute_id
-			left join meta.entity re on re.id = ra.entity_id
-			left join meta.pg_table pg on pg.id = re.id
-			where v_row.new_data ? (v.value->>'name')
-			order by a.id
-		loop
-			v_val = jsonb_build_object(
+            inner join meta.enum flg on flg.parent_id is null and flg.key='attr_flags'
+            inner join meta.attribute a on a.entity_id = v_sheet.id and a."name"=(v.value->>'name')
+            inner join meta.data_type t on t.id = a.type_id
+            left join meta.enum nn on nn.parent_id = flg.id and nn.id = any(a.flags) and nn.key = 'NN'
+            left join meta.enum uk on uk.parent_id = flg.id and uk.id = any(a.flags) and uk.key = 'UQ'
+            left join meta.attribute ra on ra.id = a.ref_attribute_id
+            left join meta.entity re on re.id = ra.entity_id
+            left join meta.pg_table pg on pg.id = re.id
+            left join meta.table_class_attrs(v_sheet.id) tca on tca.class_id = v_row.class_id and (v.value->>'name')=any(tca.attributes)
+            where v_row.new_data ? (v.value->>'name') and (v_row.class_id is null or tca.class_id = v_row.class_id) 
+            order by a.id
+        loop
+            v_val = jsonb_build_object(
               'type', v_def.type_key,
               'value', v_def.value,
               'referencе', v_def.ref_enum_key,
-			  'ref_entity_type', v_def.entity_type,
-			  'ref_attribute', v_def.ref_attribute,
-			  'ref_table', v_def.ref_table,
-			  'key_type', v_def.key_type,
-			  'key_name', v_def.key_name,
-			  'int_key', v_def.int_key,
+              'ref_entity_type', v_def.entity_type,
+              'ref_attribute', v_def.ref_attribute,
+              'ref_table', v_def.ref_table,
+              'key_type', v_def.key_type,
+              'key_name', v_def.key_name,
+              'int_key', v_def.int_key,
               'is_unique', v_def.is_unique,
               'is_nullable', v_def.is_nullable,
               'guid', v_sheet.guid,
               'column_id', v_def.id,
-			  'name', v_def.col_name,
-			  'entity_id', v_sheet.id,
-			  'entity_type', v_sheet.entity_type,
-			  'row_id', v_row.id
+              'name', v_def.col_name,
+              'entity_id', v_sheet.id,
+              'entity_type', v_sheet.entity_type,
+              'row_id', v_row.id
             );
-			raise notice 'CHK %', v_val;
+            raise notice 'CHK %', v_val;
             v_val = data.value_check(v_val);
-			raise notice 'RET %', v_val;
+            raise notice 'RET %', v_val;
 
             if (v_val->>'error') is not null then
                 return jsonb_build_object('error', v_val->>'error');
             end if;
             v_row.row_data = v_row.row_data||jsonb_build_object(v_def.fld_name, v_val->'value');
-			if v_def.type_key in ('R','r','M','E','H') then
-				v_row.refs = v_row.refs - v_def.fld_name;
-				v_row.refs = v_row.refs||jsonb_build_object(v_def.fld_name, v_val->'reference');
-			end if;
-		end loop;
+            if v_def.type_key in ('R','r','M','E','H') then
+                v_row.refs = v_row.refs - v_def.fld_name;
+                v_row.refs = v_row.refs||jsonb_build_object(v_def.fld_name, v_val->'reference');
+            end if;
+        end loop;
 
-		if v_row.status = 'D' then
-			v_counters.updated = v_counters.updated + 1;
-			update data.rvt set
-			  row_data=v_row.row_data,
-			  refs = v_row.refs
-			where id = v_row.id and version_id=v_row.version_id and entity_id=v_sheet.id;
-		else
-			v_counters.inserted = v_counters.inserted+1;
-			insert into meta.version(entity_id, parent_id)
-			values(v_sheet.id, v_sheet.version_id)
-			returning id, guid into v_row.version_id, v_sheet.version_guid;
+        if v_row.status = 'D' then
+            v_counters.updated = v_counters.updated + 1;
+            update data.rvt set
+              row_data=v_row.row_data,
+              refs = v_row.refs
+            where id = v_row.id and version_id=v_row.version_id and entity_id=v_sheet.id;
+        else
+            v_counters.inserted = v_counters.inserted+1;
+            insert into meta.version(entity_id, parent_id)
+            values(v_sheet.id, v_sheet.version_id)
+            returning id, guid into v_row.version_id, v_sheet.version_guid;
 
-			update meta.entity set version_id = v_row.version_id where id = v_sheet.id;
+            update meta.entity set version_id = v_row.version_id where id = v_sheet.id;
 
-			insert into data.rvt(id, entity_id, version_id, row_data, refs)
-			values(v_row.id, v_sheet.id, v_row.version_id, v_row.row_data, v_row.refs);
-		end if;
-	end loop;
+            insert into data.rvt(id, entity_id, version_id, row_data, refs)
+            values(v_row.id, v_sheet.id, v_row.version_id, v_row.row_data, v_row.refs);
+        end if;
+    end loop;
 
     return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end
-$data_sheet_set_rvt__2026_09_07$;
-
+$data_sheet_set_rvt__2026_09_24$;
 
 create function data.filter(f_version_id bigint, f_params jsonb)
  RETURNS TABLE(id bigint, npp integer, "mac" smallint[])
