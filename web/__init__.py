@@ -1,4 +1,4 @@
-from starlette.responses import  HTMLResponse, Response, JSONResponse
+from starlette.responses import  HTMLResponse, Response, JSONResponse as BaseJSONResponse
 from starlette.routing import Route
 from mimetypes import guess_type
 import zipfile
@@ -12,6 +12,18 @@ from .db_api import DbAPI
 from .multi_sql import get_sql, MultiQuery
 from sse_starlette import EventSourceResponse
 from .model import db_model
+class JSONResponse(BaseJSONResponse):
+
+    def render(self, content) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+            default = str
+        ).encode("utf-8")
+
 
 
 _PREFIX = ""  # префикс URL
@@ -21,11 +33,11 @@ _FL_MENU = "" # код меню для скрипта БД
 _DBG_API = ""
 
 def page_replaces(content):
-    content=content.replace("{{DB_NAME}}",_DB)
-    content=content.replace("{{PREFIX}}",_PREFIX)
-    content=content.replace("{{FN_SAVE}}",_FN_SAVE)
-    content=content.replace("{{FL_MENU}}",_FL_MENU)
-    content=content.replace("{{DBG_API}}",_DBG_API)
+    content=content.replace("/*/DB_NAME/*/",_DB)
+    content=content.replace("/*/PREFIX/*/",_PREFIX)
+    content=content.replace("/*/FN_SAVE/*/",_FN_SAVE)
+    content=content.replace("/*/FL_MENU/*/",_FL_MENU)
+    content=content.replace("/*/DBG_API/*/",_DBG_API)
     return content
 
 

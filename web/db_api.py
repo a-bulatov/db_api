@@ -471,6 +471,19 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
             info += f"\ncomment on column {attr.table_name}.{attr.attribute_name} is '{attr.attribute_comment}';\n"
         return info
 
+    @staticmethod
+    async def name_by_oid(env, oid):
+        x = await env.sql("""select quote_ident(n.nspname)||'.'||quote_ident(c.relname)
+        from pg_catalog.pg_class c
+        inner join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+        where c.oid = $1""", oid, ONE)
+        if x is None:
+            x = await env.sql("""select quote_ident(n.nspname)||'.'||quote_ident(c.proname)
+        from pg_catalog.pg_proc c
+        inner join pg_catalog.pg_namespace n on n.oid = c.pronamespace
+        where c.oid = $1""", oid, ONE)
+        return x
+
     async def do_sql(self, env, sql_b64="", sql="", **kwargs):
         await env.rollback()
         sql = sql if sql else b64decode(sql_b64).decode("utf-8")
@@ -544,12 +557,14 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
         if not isinstance(id, int):
             id = str(id).split('.')[-1]
             id = int(id)
-        query = await env.sql("""select quote_ident(n.nspname)||'.'||quote_ident(r.relname)
+        x = await env.sql("""select quote_ident(n.nspname)||'.'||quote_ident(r.relname) tbl, array_agg(a.attname) key_fld
         from pg_catalog.pg_namespace n
         inner join pg_catalog.pg_class r on r.relnamespace = n.oid
-        where r.oid = $1""", id, ONE)
-        query = f"select * from {query} limit 500"
-        ret = await self.do_sql(env, sql=query)
+        left join pg_catalog.pg_constraint cn on cn.contype = 'p' and cn.conrelid = r.oid
+        left join pg_catalog.pg_attribute a on a.attrelid = r.oid and a.attnum = any(cn.conkey)
+        where r.oid = $1 group by n.nspname, r.relname""", id, ROW, OBJECT)
+        ret = await self.do_sql(env, sql=f"select * from {x.tbl} limit 500")
+        ret["key"] = x.key_fld
         return ret
 
     def do_save_fn_old(self, sql_b64:str, **kwargs):
@@ -747,3 +762,162 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
                 await dbg.stop()
                 return {}
         return {"error":"Неизвестная операция"}
+
+    @staticmethod
+    async def table_fields(env, oid):
+        return await env.sql("""
+        select
+            quote_ident(a.attname) as arg_name,
+            cn.contype key_type,
+            coalesce(col_description(c.oid, a.attnum), a.attname) as title,
+            format_type(a.atttypid, a.atttypmod) as data_type,
+            t.typname,
+            t.typcategory,
+            (a.attnotnull and coalesce(pg_get_expr(d.adbin, d.adrelid),'')='') required,
+            a.attnotnull not_null,
+            (cn.contype = 'u') is_unique,
+            false is_array,
+            pg_get_expr(d.adbin, d.adrelid) as "default"
+        from pg_catalog.pg_attribute a
+        inner join pg_catalog.pg_type t on t.oid = a.atttypid
+        join pg_catalog.pg_class c on a.attrelid = c.oid
+        join pg_catalog.pg_namespace n on c.relnamespace = n.oid
+        left join pg_catalog.pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum
+        left join pg_catalog.pg_constraint cn on cn.contype in ('p','u') and array_length(cn.conkey,1)=1 and cn.conkey[1]=a.attnum and cn.conrelid = c.oid
+        where a.attstattarget!=0 and c.oid = $1
+        order by a.attnum
+        """, oid, OBJECT)
+
+    async  def do_form(self, env, id, key=None):
+        data = None
+        if id.startswith("fn."):
+            id = int(id[3:])
+            fields = await env.sql("""select x.*, t.typcategory, t.typname, (x."default" is null) required, x.arg_name title
+            from (
+                select x.arg_name,
+            trim(case when right(x.arg_type,2)='[]' then left(x.arg_type, length(x.arg_type)-2) else x.arg_type end) arg_type,
+            case when right(x.arg_type,2)='[]' then true else false end is_array,
+            x."default"
+            from (
+                select x.arg_name,
+            case when x.arg_type ~ ' DEFAULT ' then (string_to_array(x.arg_type, ' DEFAULT '))[1] else x.arg_type end arg_type,
+            case when x.arg_type ~ ' DEFAULT ' then (string_to_array(x.arg_type, ' DEFAULT '))[2] else null end "default"
+            from (
+                select trim(left(atr, position(' ' in atr))) arg_name, trim(right(atr,length(atr)-position(' ' in atr))) arg_type
+            from (
+                select trim(atr) atr
+            from unnest(string_to_array(pg_catalog.pg_get_function_arguments($1),',')) atr
+            ) x) x) x) x
+            left join pg_catalog.pg_type t on t.oid = pg_catalog.to_regtype(x.arg_type)
+            """, id, OBJECT)
+            title = await self.name_by_oid(env, id)
+            title = f"Функция {title}"
+        elif id.startswith("tbl."):
+            id = int(id[4:])
+            fields = await  self.table_fields(env, id)
+            title = await self.name_by_oid(env, id)
+            if key:
+                query = "select "
+                query += ", ".join([x.arg_name for x in fields])
+                query += f" from {title} "
+                where = ""
+                for x in fields:
+                    if x.arg_name not in key: continue
+                    if where: where += " and "
+                    if not key[x.arg_name]:
+                        where += f"{x.arg_name} is null"
+                        continue
+                    where += f"{x.arg_name} = "
+                    if x.typcategory in ('N','B'):
+                        where += f"{key[x.arg_name]}"
+                    else:
+                        where += f"'{key[x.arg_name]}'"
+                if where: query += f" where {where}"
+            data = await env.sql(query, ROW)
+            title = f"Таблица {title}"
+        else:
+            raise Exception(f"По ID={id} не получится построить форму")
+
+        ret = []
+        for x in fields:
+            field = {"field": x.arg_name, "type": 'text'}
+            ret.append(field)
+
+            if x.required:
+                field["required"] = True
+            if x.typcategory == "B":
+                field["type"] = "toggle"
+            elif x.typcategory == "N" and x.typname.startswith("int"):
+                field["type"] = "int"
+                field["html"] = { "label": x.title, "attr": 'style="width: 70px"' }
+                field["options"] = { "arrows": True }
+            elif x.typcategory == "N":
+                field["type"] = "float"
+            elif x.typname in ("json", 'jsonb'):
+                field["type"] = "textarea"
+
+            if  x.arg_name!=x.title:
+                field["html"] = { "label": x.title, "attr": 'style="width: 70px"' }
+
+            if x.is_array:
+                field["html"] = {"label": f"[{x.typname}] {x.arg_name}"}
+                field["type"] = "textarea"
+
+        ret = {
+            "show_form": True,
+            "caption": title,
+            "fields": ret
+        }
+        if data:
+            ret["record"] = data
+        return ret
+
+    async  def do_save(self, env, id, data):
+        if not id.startswith("tbl."):
+            raise ValueError("This is not a table")
+        id = int(id[4:])
+        fields = await  self.table_fields(env, id)
+        query = f"insert into {await self.name_by_oid(env, id)}("
+        values, keys, excl = "", "", ""
+        for x in fields:
+            val = data[x.arg_name]
+            if val is not None:
+                val = str(val).strip()
+                if val == "" and not x.required:
+                    val = None
+
+            if x.key_type == "p":
+                if keys != "": keys += ", "
+                keys += x.arg_name
+
+            if val is None:
+                val = "NULL"
+            elif x.typcategory in ('N','B'):
+                val = f"{data[x.arg_name]}"
+            else:
+                val = f"'{data[x.arg_name]}'"
+
+            if x.not_null and not x.required and val == "NULL":
+                if x.key_type != "p":
+                    if excl != "":
+                        excl += ", "
+                    excl += f" {x.arg_name} = {val}"
+                continue
+
+            if values != "":
+                query += ", "
+                values += ", "
+            query += x.arg_name
+            values += val
+            if x.key_type != "p":
+                if excl != "":
+                    excl += ", "
+                excl += f" {x.arg_name} = excluded.{x.arg_name}"
+        query = f"{query})values({values}) on conflict ({keys}) do update set {excl}"
+        try:
+            await env.sql(query)
+            await env.commit()
+        except Exception as e:
+            Config().log(e)
+
+

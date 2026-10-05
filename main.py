@@ -1,10 +1,9 @@
-from ab_engine import Config, register_rpc, call_json, register_rpc_list
+from ab_engine import Config, call_json, register_rpc_list
 from ab_engine.rpc.fnc import Fnc
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 from json5 import loads
-from web import admin_routes
+from web import admin_routes, JSONResponse
 from os import environ as ENV
 
 
@@ -39,7 +38,7 @@ def init_app():
     настройка API. API может лежать в инклуде
     """
     cfg_file = ENV.get("API_CONFIG", "config.yaml")
-    cfg = Config(cfg_file, can_include=["API"], env_map={"DB":"database"})
+    cfg = Config(cfg_file, can_include={"API"}, env_map={"DB":"database"})
     register_rpc_list(cfg.API)
     return Starlette(debug=True, routes=[Route("/api", endpoint=do_call, methods=['POST']),]+admin_routes())
 

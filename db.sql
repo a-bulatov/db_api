@@ -2615,7 +2615,8 @@ create function meta.int2guid(x bigint)
  RETURNS uuid
  LANGUAGE plpgsql
  STABLE
-AS $meta_int2guid__2026_08_10$
+AS 
+$meta_int2guid__2026_09_25$
 declare
  s varchar(36);
 begin
@@ -2623,7 +2624,7 @@ begin
  s = left(s,4)||'0000-dcba-1001-abcd-'||right(s,12);
  return s::uuid;
 end
-$meta_int2guid__2026_08_10$;
+$meta_int2guid__2026_09_25$;
 
 create function data.sheet_get_pg(f_params jsonb)
  RETURNS jsonb
