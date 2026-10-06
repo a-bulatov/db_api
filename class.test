@@ -135,3 +135,83 @@ sheet_set
         }
     ]
 }
+----------------------------------------------------------
+CREATE OR REPLACE FUNCTION demo.class_list_get(f_params jsonb DEFAULT NULL::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+begin
+ return
+    (
+	 select array_to_json(array_agg(
+        jsonb_build_object(
+             'guid',x.guid,
+             'data', jsonb_build_object(
+                  'title', x.title
+             )
+        )
+    ))::jsonb from (
+        select
+          c.guid,
+	      c.title
+        from meta.class c
+    ) x
+	);
+end
+$function$
+
+sheet_type_set
+{
+    "guid": "00000000-0000-0000-0000-000000000050",
+    "title": "Категории документов",
+    "force": true,
+    "columns":[
+        {
+        "name": "title",
+        "title": "Категория",
+        "type": "S",
+        "is_unique": true,
+        "is_editable":false,
+        "is_nullable":false
+        }
+    ],
+    "entity_type": "RSYS",
+    "read_method": "demo.class_list_get"
+}
+
+sheet_type_set
+{
+    "guid": "00000000-0000-0000-0000-000000000005",
+    "title": "Документы",
+    "columns":[
+        {
+        "name": "title",
+        "title": "Наименование",
+        "type": "S",
+        "is_nullable":false
+        },
+        {
+        "name": "category",
+        "title": "Kaтегория",
+        "type": "R",
+        "is_nullable":false,
+        "reference_guid":"00000000-0000-0000-0000-000000000050",
+        "reference_names":"title"
+        }
+    ],
+    "entity_type": "RVT"
+}
+
+sheet_set
+{
+    "guid": "00000000-0000-0000-0000-000000000005",
+    "rows":[
+        {
+          "guid": "cd21db12-3d5f-4986-bce4-be8963f1899c",
+          "data": {
+            "title": "Тестовая",
+            "category": "d494fbab-713f-49ff-831e-10e380a4730e"
+          }
+        }
+    ]
+}

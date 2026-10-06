@@ -890,7 +890,8 @@ update on data.rvt for each row execute
 create function data.version_get_value(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $data_version_get_value__2026_06_26$
+AS 
+$data_version_get_value__2026_10_06$
 declare
  v_sheet record;
  v_cnt integer;
@@ -899,137 +900,142 @@ begin
 Возвращает значения заданного атрибута по заданному guid таблицы, версии и/или идентификаторам строк.
 Выходная структура аналогична входной, но в row значения полей, а не идентификаторы
 {
-	"version_guid": "идентификатор версии. если не задан то будет найден автоматически",
-	"guid": "идентификатор таблицы. версия будет найдена автоматически",
-	"column": "поле откуда тянуть значения, если не задано, то только поиск таблицы/версии"
-	"value": "guid или список guid-ов строк. если не задан, то только поиск таблицы/версии"
+    "version_guid": "идентификатор версии. если не задан то будет найден автоматически",
+    "guid": "идентификатор таблицы. версия будет найдена автоматически",
+    "column": "поле откуда тянуть значения, если не задано, то только поиск таблицы/версии"
+    "value": "guid или список guid-ов строк. если не задан, то только поиск таблицы/версии"
 }
 */
-	if (f_params->>'version_guid') is not null then
-		select e.id, e.guid, e.entity_type, v.id version_id, v.guid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
-		into v_sheet
-		from meta.entity e
-		inner join meta.version v on v.entity_id = e.id and v.guid = (f_params->>'version_guid')::uuid;
-	elseif (f_params->>'guid') is not null then
-		select e.id, e.guid, e.entity_type, null::bigint version_id, null::uuid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
-		into v_sheet
-		from meta.entity e
-		where e.guid = (f_params->>'guid')::uuid;
-	elseif (f_params->>'version_guid') is null and jsonb_typeof(f_params->'value')='string' then
-		select e.id, e.guid, e.entity_type, null::bigint version_id, null::uuid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
-		into v_sheet
-		from meta.entity e
-		inner join data.row r on r.guid = (f_params->>'value')::uuid and r.entity_id = e.id;
-	elseif (f_params->>'version_guid') is null and jsonb_typeof(f_params->'value')='array' then
-		select e.id, e.guid, e.entity_type, null::bigint version_id, null::uuid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
-		into v_sheet
-		from meta.entity e
-		inner join data.row r on r.guid = (f_params->'value'->>0)::uuid and r.entity_id = e.id;
-	else
-		select null::bigint id into v_sheet;
-	end if;
+    if (f_params->>'version_guid') is not null then
+        select e.id, e.guid, e.entity_type, v.id version_id, v.guid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
+        into v_sheet
+        from meta.entity e
+        inner join meta.version v on v.entity_id = e.id and v.guid = (f_params->>'version_guid')::uuid;
+    elseif (f_params->>'guid') is not null then
+        select e.id, e.guid, e.entity_type, null::bigint version_id, null::uuid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
+        into v_sheet
+        from meta.entity e
+        where e.guid = (f_params->>'guid')::uuid;
+    elseif (f_params->>'version_guid') is null and jsonb_typeof(f_params->'value')='string' then
+        select e.id, e.guid, e.entity_type, null::bigint version_id, null::uuid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
+        into v_sheet
+        from meta.entity e
+        inner join data.row r on r.guid = (f_params->>'value')::uuid and r.entity_id = e.id;
+    elseif (f_params->>'version_guid') is null and jsonb_typeof(f_params->'value')='array' then
+        select e.id, e.guid, e.entity_type, null::bigint version_id, null::uuid version_guid, null::jsonb "rows", null::bigint attr_id, e.f_read is not null calc
+        into v_sheet
+        from meta.entity e
+        inner join data.row r on r.guid = (f_params->'value'->>0)::uuid and r.entity_id = e.id;
+    else
+        select null::bigint id into v_sheet;
+    end if;
 
-	if v_sheet.id is null then
-		return jsonb_build_object('error','Не найдена таблица с данными по ссылке');
-	end if;
+    if v_sheet.id is null then
+        return jsonb_build_object('error','Не найдена таблица с данными по ссылке');
+    end if;
 
-	if v_sheet.version_id is null then
-		select v_sheet.id, v_sheet.guid, v_sheet.entity_type, x.id version_id, v.guid version_guid, v_sheet."rows", v_sheet.attr_id, v_sheet.calc
-		into v_sheet
-		from (
-		  select case
-		   when v.status='A' then 0
-		   when v.status='P' then 1
-		   when v.status='R' then 2
-		   when v.status='D' then 3
-		   else 4
-		  end, max(v.id) id
-		  from meta.version v
-		  where v.entity_id = v_sheet.id
-		  group by 1
-		  order by 1
-		  limit 1
-		) x
-		inner join meta.version v on v.id = x.id
-		limit 1;
-	end if;
+    if v_sheet.version_id is null then
+        select v_sheet.id, v_sheet.guid, v_sheet.entity_type, x.id version_id, v.guid version_guid, v_sheet."rows", v_sheet.attr_id, v_sheet.calc
+        into v_sheet
+        from (
+          select case
+           when v.status='A' then 0
+           when v.status='P' then 1
+           when v.status='R' then 2
+           when v.status='D' then 3
+           else 4
+          end, max(v.id) id
+          from meta.version v
+          where v.entity_id = v_sheet.id
+          group by 1
+          order by 1
+          limit 1
+        ) x
+        inner join meta.version v on v.id = x.id
+        limit 1;
+    end if;
 
-	if (f_params->>'column') is not null then
-		select a.id into v_sheet.attr_id
-		from meta.attribute a
-		where a.entity_id = v_sheet.id and (
-		  (jsonb_typeof(f_params->'column')='number' and a.id = (f_params->>'column')::bigint) or
-		  (jsonb_typeof(f_params->'column')='string' and a.name = (f_params->>'column')));
+    if (f_params->>'column') is not null then
+        select a.id into v_sheet.attr_id
+        from meta.attribute a
+        where a.entity_id = v_sheet.id and (
+          (jsonb_typeof(f_params->'column')='number' and a.id = (f_params->>'column')::bigint) or
+          (jsonb_typeof(f_params->'column')='string' and a.name = (f_params->>'column')));
 
-		if v_sheet.attr_id is null then
-			return jsonb_build_object('error',format('Атрибут %s не найден', f_params->>'column'));
-		end if;
+        if v_sheet.attr_id is null then
+            return jsonb_build_object('error',format('Атрибут %s не найден', f_params->>'column'));
+        end if;
 
-		if jsonb_typeof(f_params->'value')='string' then
-			select array_to_json(array[f_params->>'value'])::jsonb
-			into v_sheet."rows";
-		else
-			v_sheet."rows" = f_params->'value';
-		end if;
+        if jsonb_typeof(f_params->'value')='string' then
+            select array_to_json(array[f_params->>'value'])::jsonb
+            into v_sheet."rows";
+        else
+            v_sheet."rows" = f_params->'value';
+        end if;
 
-		v_cnt = jsonb_array_length(v_sheet."rows");
+        v_cnt = jsonb_array_length(v_sheet."rows");
 
-		if v_cnt = 0 then
-			return jsonb_strip_nulls(jsonb_build_object(
-			  'version_guid', v_sheet.version_guid,
-			  'guid', v_sheet.guid,
-			  'not_exists', 0,
-			  'column', (f_params->>'column')
-			));
-		end if;
+        if v_cnt = 0 then
+            return jsonb_strip_nulls(jsonb_build_object(
+              'version_guid', v_sheet.version_guid,
+              'guid', v_sheet.guid,
+              'not_exists', 0,
+              'column', (f_params->>'column')
+            ));
+        end if;
 
-		if not v_sheet.calc and v_sheet.entity_type in ('EAV', 'VER') then
-			select jsonb_agg(
-			  case
-			    when t.eav_field = 's' then d.s
-			    when t.eav_field = 'i' then d.i::text
-			    when t.eav_field = 'f' then d.f::text
-			    when t.eav_field = 't' then d.t::text
-			    else '...'::text
-			  end
-			)
-			into v_sheet."rows"
-			from jsonb_array_elements_text(v_sheet."rows") qr
-			inner join data.row r on r.guid = qr.value::uuid and r.entity_id = v_sheet.id
-			inner join data.eav d on d.attribute_id = v_sheet.attr_id and d.version_id = v_sheet.version_id and d.id = r.id
-			inner join meta.attribute a on a.id = v_sheet.attr_id
-			inner join meta.data_type t on t.id = a.type_id;
-		else
-			select array_to_json(array_agg(d.value->'value'->(f_params->>'column')))
-			into v_sheet."rows"
-			from jsonb_array_elements(
-			  data.sheet_get(jsonb_build_object(
-				'version_guid', v_sheet.version_guid,
-				'fields', array_to_json(ARRAY[version_guid]),
-				'filter', v_sheet."rows"
-			  ))->'rows'
-			) d;
-		end if;
-	else
-		return jsonb_strip_nulls(jsonb_build_object(
+        if not v_sheet.calc and v_sheet.entity_type in ('EAV', 'VER') then
+            select jsonb_agg(
+              case
+                when t.eav_field = 's' then d.s
+                when t.eav_field = 'i' then d.i::text
+                when t.eav_field = 'f' then d.f::text
+                when t.eav_field = 't' then d.t::text
+                else '...'::text
+              end
+            )
+            into v_sheet."rows"
+            from jsonb_array_elements_text(v_sheet."rows") qr
+            inner join data.row r on r.guid = qr.value::uuid and r.entity_id = v_sheet.id
+            inner join data.eav d on d.attribute_id = v_sheet.attr_id and d.version_id = v_sheet.version_id and d.id = r.id
+            inner join meta.attribute a on a.id = v_sheet.attr_id
+            inner join meta.data_type t on t.id = a.type_id;
+        else
+            select array_to_json(array_agg(d.col_value))
+            into v_sheet."rows"
+            from(
+            select x.value->'data'->(f_params->>'column') col_value, (x.value->>'guid')::uuid guid
+            from jsonb_array_elements(
+              data.sheet_get(jsonb_build_object(
+                'version_guid', v_sheet.version_guid,
+                'fields', array_to_json(ARRAY[f_params->>'column']),
+                'filter', v_sheet."rows"
+              ))->'rows'
+            ) x) d  
+            inner join (
+              select value::uuid guid
+              from jsonb_array_elements_text(v_sheet."rows")
+            ) x on x.guid = d.guid;            
+        end if;
+    else
+        return jsonb_strip_nulls(jsonb_build_object(
           'version_guid', v_sheet.version_guid,
           'guid', v_sheet.guid
         ));
-	end if;
+    end if;
 
-	return jsonb_strip_nulls(jsonb_build_object(
-	  'version_guid', v_sheet.version_guid,
-	  'guid', v_sheet.guid,
-	  'value', case
-	  			when jsonb_typeof(f_params->'value')='string' then v_sheet."rows"->0
-	  			else v_sheet."rows"
-	  		  end,
-	  'not_exists', v_cnt - coalesce(jsonb_array_length(v_sheet."rows"),0),
-	  'column', (f_params->>'column')
-	));
+    return jsonb_strip_nulls(jsonb_build_object(
+      'version_guid', v_sheet.version_guid,
+      'guid', v_sheet.guid,
+      'value', case
+                  when jsonb_typeof(f_params->'value')='string' then v_sheet."rows"->0
+                  else v_sheet."rows"
+                end,
+      'not_exists', v_cnt - coalesce(jsonb_array_length(v_sheet."rows"),0),
+      'column', (f_params->>'column')
+    ));
 end
-$data_version_get_value__2026_06_26$;
-
+$data_version_get_value__2026_10_06$;
 
 create or replace function data.value_check(f_params jsonb)
  RETURNS jsonb
@@ -1207,7 +1213,7 @@ create function data.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS 
-$data_sheet_set__2026_09_24$
+$data_sheet_set__2026_10_06$
 declare
    v_sheet record;
    v_counters record;
@@ -1270,7 +1276,7 @@ begin
 
         update meta.entity set version_id = v_sheet.version_id where id = v_sheet.id;
    end if;
-
+raise notice '%', row_to_json(v_sheet);
    for v_row in
         select
             rows.guid::varchar guid,   -- guid строки
@@ -1290,6 +1296,7 @@ begin
                 then col.ref_enum_key
                 else re.guid::varchar
             end reference,
+            re.entity_type ref_entity_type,
             nn.id is null as is_nullable,
             uk.id is not null as is_unique,
             pgt.key_name, pgt.int_key,
@@ -1322,7 +1329,7 @@ begin
         if v_row.attribute_id is null then
             return jsonb_build_object('error', format('Атрибут %s не найден или ошибка в структуре входного сообщения',v_row.name));
         end if;
-
+raise notice '%', row_to_json(v_row);
         if v_row.guid != tmp_row_guid then
             tmp_row_guid = v_row.guid;
             v_counters.input=v_counters.input + 1;
@@ -1355,7 +1362,7 @@ begin
                return jsonb_build_object('error', format('В таблице %s.%s не найдена запись для %s', v_row.schema_name, v_row.table_name, v_row.name));
             end if;
             v_row.eav_field = 'i';
-        elseif v_row.type_code = 'R' and v_row.value is not null and v_row.key_name is not null then
+        elseif v_row.type_code = 'R' and v_row.value is not null and (v_row.key_name is not null or v_row.ref_entity_type = 'RSYS') then
             v_row.value = (v_row.value::uuid)::varchar;
             v_row.eav_field = 's';
         elseif v_row.type_code = 'R' and v_row.value is not null then
@@ -1462,7 +1469,7 @@ begin
 
    return row_to_json(v_counters)::jsonb||jsonb_build_object('version_guid',v_sheet.version_guid, 'guid', v_sheet.guid);
 end;
-$data_sheet_set__2026_09_24$;
+$data_sheet_set__2026_10_06$;
 
 create function data.sheet_set_rvt(f_params jsonb)
  RETURNS jsonb
@@ -1847,7 +1854,7 @@ create function data.sheet_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS 
-$data_sheet_get__2026_09_18$
+$data_sheet_get__2026_10_06$
 declare
    v_sheet record;
    v_ret jsonb;
@@ -1920,7 +1927,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
         return jsonb_build_object('query', t_tmp);
    elseif v_sheet.f_read is not Null then
            /* если задана кастомная функция для получения данных - вызываем её */
-        t_tmp = format($q$select %s('%s')$q$, v_sheet.f_read,f_params);
+        t_tmp = format($q$select %s('%s'::jsonb)$q$, v_sheet.f_read,f_params);
         execute t_tmp into v_ret;
    elseif v_sheet.fields is null and v_sheet.entity_type in ('EAV', 'VER') then
            /* возврат только гуидов EAV - поля не запросили */
@@ -2078,7 +2085,7 @@ from jsonb_array_elements(data.sheet_get('%s')->'rows') tbl$q$, t_tmp, f_params)
 
    return jsonb_build_object('guid', v_sheet.guid, 'version_guid', v_sheet.version_guid, 'rows', v_ret);
 end
-$data_sheet_get__2026_09_18$;
+$data_sheet_get__2026_10_06$;
 
 create function data.filter_query_get(f_params jsonb)
  RETURNS jsonb
