@@ -892,6 +892,11 @@ alter table {attr.table_name} add column {attr.attribute_name} {attr.data_type}"
 
             if val is None:
                 val = "NULL"
+            elif x.data_type.endswith("[]"):
+                if val.startswith("["):
+                    val = f"'{{{val[1:-1]}}}'"
+                else:
+                    val = "NULL"
             elif x.typcategory in ('N','B'):
                 val = f"{data[x.arg_name]}"
             else:

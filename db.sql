@@ -18,15 +18,21 @@ create unique index meta_enum_uk on meta.enum using btree (coalesce(parent_id, (
 comment on table meta."enum" is 'хранилище перечислений';
 
 --- функции для работы с enum
-create function meta.enum_id(enum_key varchar(100))
- returns integer
- language sql
- stable
-as
-$$
-select id from meta.enum where parent_id is null and key = enum_key;
-$$;
-comment on function meta.enum_id(varchar) is 'Возвращает ID перечисления по ключу';
+create function meta.enum_id(enum_key character varying, parent_key character varying default null)
+ RETURNS integer
+ LANGUAGE sql
+ STABLE
+AS 
+$meta_enum_id__2026_10_08$
+select e.id from meta.enum e
+where (
+  (e.parent_id is null and parent_key is null) or
+  (e.parent_id = (select ep.id from meta.enum ep where ep.parent_id is null and ep.key = parent_key))
+)
+and key = enum_key;
+$meta_enum_id__2026_10_08$;
+
+comment on function meta.enum_id(enum_key character varying, parent_key character varying) is 'Возвращает ID перечисления по ключу';
 
 
 create function meta.enum_keys_to_ids(p_enum varchar(250), p_keys varchar(250)[])
@@ -117,7 +123,8 @@ values
 ('data_type', 'Типы данных'),
 ('version_status','Статусы версии'),
 ('entity_type','Типы таблиц'),
-('attr_flags','Флаги атрибутов')
+('attr_flags','Флаги атрибутов'),
+('class_tag','Тэги классоов')
 ;
 
 create table meta.data_type ( like meta."enum" including indexes, check(parent_id =  meta.enum_id('data_type')) ) inherits (meta."enum");
@@ -180,6 +187,13 @@ from (values
 ) x;
 
 
+insert into meta.enum(key, name, parent_id)
+select x.column1, x.column2, meta.enum_id('class_tag')
+from (values
+  ('HIDDEN', 'Скрытый')
+) x;
+
+
 create table meta.entity (
 	id bigint not null primary key,
 	guid uuid unique default uuid_generate_v4() not null,
@@ -200,6 +214,7 @@ create table meta.class (
     id bigserial not null primary key,
     parent_id bigint references meta.class,
     guid uuid unique default uuid_generate_v4() not null,
+    tag integer[],
     title varchar(250) unique not null,
     description text,
     visible boolean not null default true,
@@ -238,7 +253,7 @@ create table meta."attribute" (
 	npp integer,
 	"name" varchar(100) not null,
 	title varchar(250) not null,
-	type_id integer null references meta.data_type(id),
+ 	type_id integer not null references meta.data_type(id) default meta.enum_id('S', 'data_type'),
 	ref_attribute_id bigint references meta.attribute(id) on delete cascade,
 	ref_enum_key varchar(100),
 	flags integer[],
@@ -369,28 +384,29 @@ $$;
 create function meta.sheet_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
-AS $meta_sheet_set__2026_08_24$
+AS 
+$meta_sheet_set__2026_10_08$
 declare
     v_sheet record;
     v_column record;
     v_ret json;
     v_force boolean;
-	v_tmp varchar;
+    v_tmp varchar;
 begin
     if coalesce(f_params::varchar,'{}')='{}' then
         return jsonb_build_object('error', 'структура таблицы не задана');
     end if;
 
     v_force = coalesce((f_params ->> 'force')::boolean,false);
-	
-	select t.guid::varchar
-	into v_tmp
-	from meta.pg_table t 
-	where t.guid = (f_params->>'guid')::uuid or t."name"=(f_params->>'table_name');
+    
+    select t.guid::varchar
+    into v_tmp
+    from meta.pg_table t 
+    where t.guid = (f_params->>'guid')::uuid or t."name"=(f_params->>'table_name');
 
-	if v_tmp is not null then
-		f_params = f_params || jsonb_build_object('entity_type', 'PHYS', 'guid', v_tmp);
-	end if;
+    if v_tmp is not null then
+        f_params = f_params || jsonb_build_object('entity_type', 'PHYS', 'guid', v_tmp);
+    end if;
 
     select
         e.id,
@@ -413,48 +429,48 @@ begin
          return jsonb_build_object('error',format('Запрещены изменения структуры таблицы %s', e.title));
     end if;
 
-	if coalesce((f_params->>'delete')::boolean, false) then
-		if not v_force then
-			v_force = exists(
-			  	select 1
-				from meta.attribute a1
-				inner join meta.attribute a2 on a1.ref_attribute_id = a2.id and a2.entity_id = v_sheet.id
-			);
-			/*
-			сюда добавить проверку наличия ссылки на таблицу внутри другой таблицы, в том числе RVT (паспорта)
-			*/
-			if v_force then
-				return jsonb_build_object('error', 'Таблица не может быть удалена т.к. на неё есть ссылки');
-			end if;
-		end if;
-		if v_sheet.entity_type = 'RVT' then
-			v_tmp = format('drop table data.rvt_%s', v_sheet.id);
-			execute v_tmp;
-		elseif v_sheet.entity_type in ('VER', 'EAV') then
-			for v_tmp in
-				select format('drop table if exists data.eav_%s',v.id)
-				from meta.version v
-				where v.entity_id = v_sheet.id
-			loop
-				execute v_tmp;
-			end loop;
-		elseif v_sheet.entity_type = 'PHYS' then
-			v_sheet.entity_type = 'PHYS';
-		else
-			select e.name
-			into v_tmp
-			from meta.enum t
-			inner join meta.enum e on t.parent_id is null and t.key='entity_type' and e.key=v_sheet.entity_type;
-			return jsonb_build_object('error', format('Нельзя удалять %s', v_tmp));
-		end if;
-		delete from meta.entity where id = v_sheet.id;
-		delete from data."row" where guid =v_sheet.guid;
-		return jsonb_build_object();
-	end if;
+    if coalesce((f_params->>'delete')::boolean, false) then
+        if not v_force then
+            v_force = exists(
+                  select 1
+                from meta.attribute a1
+                inner join meta.attribute a2 on a1.ref_attribute_id = a2.id and a2.entity_id = v_sheet.id
+            );
+            /*
+            сюда добавить проверку наличия ссылки на таблицу внутри другой таблицы, в том числе RVT (паспорта)
+            */
+            if v_force then
+                return jsonb_build_object('error', 'Таблица не может быть удалена т.к. на неё есть ссылки');
+            end if;
+        end if;
+        if v_sheet.entity_type = 'RVT' then
+            v_tmp = format('drop table data.rvt_%s', v_sheet.id);
+            execute v_tmp;
+        elseif v_sheet.entity_type in ('VER', 'EAV') then
+            for v_tmp in
+                select format('drop table if exists data.eav_%s',v.id)
+                from meta.version v
+                where v.entity_id = v_sheet.id
+            loop
+                execute v_tmp;
+            end loop;
+        elseif v_sheet.entity_type = 'PHYS' then
+            v_sheet.entity_type = 'PHYS';
+        else
+            select e.name
+            into v_tmp
+            from meta.enum t
+            inner join meta.enum e on t.parent_id is null and t.key='entity_type' and e.key=v_sheet.entity_type;
+            return jsonb_build_object('error', format('Нельзя удалять %s', v_tmp));
+        end if;
+        delete from meta.entity where id = v_sheet.id;
+        delete from data."row" where guid =v_sheet.guid;
+        return jsonb_build_object();
+    end if;
 
-	if v_sheet.entity_type='PHYS' then
-		return meta.sheet_set_pg(f_params);
-	end if;
+    if v_sheet.entity_type='PHYS' then
+        return meta.sheet_set_pg(f_params);
+    end if;
 
     if v_sheet.id is null then
         insert into data."row"(guid, entity_id)
@@ -482,10 +498,10 @@ begin
         set version_id = v_sheet.version_id
         where id = v_sheet.id;
 
-    	if v_sheet.entity_type='RVT' then
-		  execute 'create table data.rvt_'||v_sheet.id::varchar||' ( like data.rvt including indexes, check(entity_id = '||
-					  v_sheet.id::varchar||') ) inherits (data.rvt)';
-		end if;
+        if v_sheet.entity_type='RVT' then
+          execute 'create table data.rvt_'||v_sheet.id::varchar||' ( like data.rvt including indexes, check(entity_id = '||
+                      v_sheet.id::varchar||') ) inherits (data.rvt)';
+        end if;
     elseif v_sheet.up_version then
         v_ret = data.sheet_set(jsonb_build_object(
           'guid', v_sheet.guid,
@@ -513,19 +529,19 @@ begin
             attr.defs,
             a.flags
         from (
-		  select row_number() over() npp,
-		  	(x.value->>'name') "name",
-		    (x.value->>'type') "type",
-		    (x.value->>'title') "title",
-		    (x.value->>'reference') "reference",
-		    (x.value->>'reference_column') "reference_column",
-		     x.value defs
-		  from
-		  jsonb_array_elements(f_params->'columns') x
-		) attr
+          select row_number() over() npp,
+              (x.value->>'name') "name",
+            coalesce((x.value->>'type'),'S') "type",
+            (x.value->>'title') "title",
+            (x.value->>'reference') "reference",
+            (x.value->>'reference_column') "reference_column",
+             x.value defs
+          from
+          jsonb_array_elements(f_params->'columns') x
+        ) attr
         left join meta.attribute a on a.entity_id = v_sheet.id and a.name = attr.name
         left join meta.data_type t on t.key = attr.type
-		order by attr.npp
+        order by attr.npp
     loop
         if v_column.type_key in ('R','M') then
              select a.id into v_column.ref_attribute_id
@@ -586,8 +602,7 @@ begin
         where e.id = v_sheet.id
     );
 end;
-$meta_sheet_set__2026_08_24$;
-
+$meta_sheet_set__2026_10_08$;
 
 create function meta.sheet_get(f_params jsonb)
  RETURNS jsonb
@@ -2971,7 +2986,8 @@ create function meta.class_set(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS 
-$meta_class_set__2026_09_22$
+
+$meta_class_set__2026_10_08$
 declare
     v_class record;
     v_attr record;
@@ -2987,14 +3003,15 @@ begin
          coalesce((f_params->>'visible')::boolean, cl.visible, true) visible,
          coalesce((f_params->>'description'), cl.description) "description",
          e.f_read is not null custom_read,
-         e.title table_title
+         e.title table_title,
+         cl.tag
     from (select coalesce((f_params->>'guid')::uuid, uuid_generate_v4()) guid) q
     left join meta.class cl on cl.guid = q.guid
     left join meta.class pcl on pcl.id = cl.parent_id or (cl.id is null and pcl.guid = (f_params->>'parent_guid')::uuid)
     left join meta.entity e on e.id = cl.entity_id or (cl.id is null and e.guid = (f_params->>'table_guid')::uuid)
     into v_class;
   
-      if v_class.custom_read then 
+    if v_class.custom_read then 
         return jsonb_build_object('error', format('Таблица %s не может хранить экземпляры классов', v_class.table_title));
     elseif trim(coalesce(v_class.title,''))='' then
         return jsonb_build_object('error', 'Название класса должно быть заполнено');
@@ -3027,6 +3044,10 @@ begin
         into v_class.entity_guid
         from meta.entity 
         where id = v_class.entity_id;
+    end if;
+    
+    if f_params ? 'tag' then
+       v_class.tag = meta.enum_keys_to_ids('class_tag', (select array_agg(x) from jsonb_array_elements_text(f_params->'tag') x));
     end if;
     
     if v_class.is_new then
@@ -3105,13 +3126,13 @@ begin
     left join meta.entity e on e.id = c.entity_id
     where c.id = v_class.id);
 end;
-$meta_class_set__2026_09_22$;
+$meta_class_set__2026_10_08$;
 
 create function meta.class_get(f_params jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
 AS 
-$meta_class_get__2026_09_22$
+$meta_class_get__2026_10_08$
 declare
   v_class record;
   v_attrs jsonb;
@@ -3182,6 +3203,7 @@ begin
           'table_guid', e.guid,
           'title', c.title,
           'description', c.description,
+          'tag', meta.enum_ids_to_keys('class_tag', c.tag),
           'attributes', v_attrs
         )
         from meta.class c
@@ -3190,7 +3212,7 @@ begin
         where c.id = v_class.id
     );
 end
-$meta_class_get__2026_09_22$;
+$meta_class_get__2026_10_08$;
 
 create function meta.table_class_attrs(table_id bigint DEFAULT NULL::bigint)
  RETURNS TABLE(class_id bigint, attributes character varying[], attr_ids bigint[])
