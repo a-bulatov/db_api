@@ -378,27 +378,26 @@ end
 $meta_field_list__2026_09_22$;
 
 create function meta.enum_get(f_params jsonb)
- returns jsonb
- language plpgsql
+returns jsonb
+language plpgsql
 as $$
 declare
     p_id integer;
 begin
     if f_params ? 'key' then
-        select e.id into p_id
-        from meta.enum e
-        where e.key=f_params ->> 'key' and e.parent_id is null and e.dd is Null;
-        if p_id is Null then
+        begin
+            p_id = meta.enum_id(f_params->>'key');
+        exception when others then
             return jsonb_build_object('error',format('Не найдено перечисление %s',(f_params ->> 'key')));
-        end if;
+        end;
 
         return (select array_to_json(array_agg(row_to_json(x)))::jsonb from (
-          select e."key", e."name" from meta.enum e where e.parent_id = p_id and e.dd is Null
+            select e."key", e."name" from meta.enum e where e.parent_id = p_id and e.dd is Null
         ) x);
     end if;
 
     return (select array_to_json(array_agg(row_to_json(x)))::jsonb from (
-      select e."key", e."name" from meta.enum e where e.parent_id is Null and e.dd is Null
+        select e."key", e."name" from meta.enum e where e.parent_id is Null and e.dd is Null
     ) x);
 end
 $$;
