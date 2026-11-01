@@ -18,21 +18,43 @@ create unique index meta_enum_uk on meta.enum using btree (coalesce(parent_id, (
 comment on table meta."enum" is 'хранилище перечислений';
 
 --- функции для работы с enum
-create function meta.enum_id(enum_key character varying, parent_key character varying default null)
+create function meta.enum_id(enum_key character varying)
  RETURNS integer
- LANGUAGE sql
+ LANGUAGE plpgsql
  STABLE
 AS 
-$meta_enum_id__2026_10_08$
-select e.id from meta.enum e
-where (
-  (e.parent_id is null and parent_key is null) or
-  (e.parent_id = (select ep.id from meta.enum ep where ep.parent_id is null and ep.key = parent_key))
-)
-and key = enum_key;
-$meta_enum_id__2026_10_08$;
+$meta_enum_id__2026_11_01$
+declare
+    k_data record;
+    key_id integer = 0;
+  begin
+    for k_data in
+      select count(*) over() cnt, x.str, x.n
+      from (
+        select row_number() over() n, trim(unnest) str
+        from unnest(string_to_array(trim(enum_key)||'.', '.'))
+      ) x order by x.n
+    loop
+      if k_data.cnt = k_data.n then
+        return  key_id;
+      elseif key_id = 0 then
+        select e.id  into key_id
+        from meta."enum" e
+        where e.parent_id is null and e.key = k_data.str;
+      else
+        select e.id  into key_id
+        from meta."enum" e
+        where e.parent_id = key_id and e.key = k_data.str;
+      end if;
+      if key_id is null then
+         raise exception 'Ключ % не найден', enum_key;
+      end if;
+    end loop;
+    return  key_id;
+  end
+$meta_enum_id__2026_11_01$;
 
-comment on function meta.enum_id(enum_key character varying, parent_key character varying) is 'Возвращает ID перечисления по ключу';
+comment on function meta.enum_id(enum_key character varying) is 'Возвращает ID перечисления по ключу';
 
 
 create function meta.enum_keys_to_ids(p_enum varchar(250), p_keys varchar(250)[])
@@ -253,7 +275,7 @@ create table meta."attribute" (
 	npp integer,
 	"name" varchar(100) not null,
 	title varchar(250) not null,
- 	type_id integer not null references meta.data_type(id) default meta.enum_id('S', 'data_type'),
+ 	type_id integer not null references meta.data_type(id) default meta.enum_id('data_type.S'),
 	ref_attribute_id bigint references meta.attribute(id) on delete cascade,
 	ref_enum_key varchar(100),
 	flags integer[],

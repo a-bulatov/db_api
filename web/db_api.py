@@ -104,7 +104,8 @@ order by ns.nspname""")
             if not schema["nodes"]: continue
             for table in schema["nodes"]:
                 if table["icon"] not in ("fa fa-table", "fa fa-table-columns", "fa fa-table-cells-column-lock"): continue
-                tables[f'{schema["text"]}.{table["text"].rsplit("(",1)[0].strip()}'] = [x["text"] for x in table["nodes"]]
+                if table["nodes"]:
+                    tables[f'{schema["text"]}.{table["text"].rsplit("(",1)[0].strip()}'] = [x["text"] for x in table["nodes"]]
 
 
         schema = await env.sql("select current_database()", ONE)
@@ -268,23 +269,24 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
             left join pg_attrdef ad on a.attrelid = ad.adrelid and a.attnum = ad.adnum
             where a.attnum>0 and a.attrelid = $1 and a.attstattarget!=0
             order by a.attnum""", id, OBJECT)
-        for x in defs:
-            add_def = True
-            if str(x.default).startswith("nextval('"):
-                add_def =False
-                match x.type:
-                    case 'bigint':  ret+=f"    {x.name} bigserial"
-                    case 'int':  ret+=f"    {x.name} serial"
-                    case 'integer':  ret+=f"    {x.name} serial"
-                    case 'smallint':  ret+=f"    {x.name} smallserial"
-            else:
-                ret+=f"    {x.name} {x.type}"
-            if x.not_null:
-                ret += " not null"
-            if x.default and add_def:
-                ret += f" {x.default}"
-            ret += ",\n"
-        ret = ret[:-2]+"\n); \n"
+        if defs:
+            for x in defs:
+                add_def = True
+                if str(x.default).startswith("nextval('"):
+                    add_def =False
+                    match x.type:
+                        case 'bigint':  ret+=f"    {x.name} bigserial"
+                        case 'int':  ret+=f"    {x.name} serial"
+                        case 'integer':  ret+=f"    {x.name} serial"
+                        case 'smallint':  ret+=f"    {x.name} smallserial"
+                else:
+                    ret+=f"    {x.name} {x.type}"
+                if x.not_null:
+                    ret += " not null"
+                if x.default and add_def:
+                    ret += f" {x.default}"
+                ret += ",\n"
+            ret = ret[:-2]+"\n); \n"
         defs = await env.sql("""select jsonb_build_object(
             'schema', quote_ident(ns.nspname),
             'table', quote_ident(tbl.relname),
@@ -338,21 +340,23 @@ revoke all on schema "{inf.name}" to <пользователь>; -- отозва
         inner join pg_catalog.pg_namespace ns on cons.connamespace = ns.oid
         inner join pg_catalog.pg_class tbl on cons.conrelid = tbl.oid
         where TBL.OID = $1""", id)
-        for x in defs:
-            x = x['value']
-            if cl := x.get("columns"):
-                x["columns"]=', '.join(cl)
-            if x.get("references"):
-                x["references"]['columns'] = ', '.join(x["references"]['columns'])
-            ret += f"\nalter table {x['schema']}.{x['table']} add constraint {x['name']} "
-            match x['type']:
-                case "FOREIGN KEY":
-                    ret += f"foreign key({x['columns']}) references {x['references']['schema']}.{x['references']['table']}({x['references']['columns']}"
-                case "CHECK":
-                    ret += f"check ({x['expression']}"
-                case _:
-                    ret += f" {x['type'].lower()} ({x['columns']}"
-            ret+=");\n"
+        if defs:
+            for x in defs:
+                x = x['value']
+                if cl := x.get("columns"):
+                    x["columns"]=', '.join(cl)
+                if r:=x.get("references"):
+                    if r['columns']:
+                        r['columns'] = ', '.join(r['columns'])
+                ret += f"\nalter table {x['schema']}.{x['table']} add constraint {x['name']} "
+                match x['type']:
+                    case "FOREIGN KEY":
+                        ret += f"foreign key({x['columns']}) references {x['references']['schema']}.{x['references']['table']}({x['references']['columns']}"
+                    case "CHECK":
+                        ret += f"check ({x['expression']}"
+                    case _:
+                        ret += f" {x['type'].lower()} ({x['columns']}"
+                ret+=");\n"
         return ret
 
     async def table_info(self, env, id):
